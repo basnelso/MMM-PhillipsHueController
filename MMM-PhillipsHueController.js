@@ -1,7 +1,7 @@
 /* global Module */
 
 /* Magic Mirror
- * Module: mmm-hue-lights
+ * Module: MMM-PhillipsHueController
  *
  * By Michael Schmidt
  * https://github.com/michael5r
@@ -9,7 +9,7 @@
  * MIT Licensed.
  */
 
-Module.register('mmm-hue-lights', {
+Module.register('MMM-PhillipsHueController', {
 
     defaults: {
         bridgeIp: '',
@@ -42,7 +42,7 @@ Module.register('mmm-hue-lights', {
 
     getStyles: function() {
         return [
-            'mmm-hue-lights.css'
+            'MMM-PhillipsHueController.css'
         ];
     },
 
