@@ -61,6 +61,7 @@ Module.register('MMM-PhillipsHueController', {
         this.lights = {};
         this.groups = {};
 
+        this.hbDataArr = [];
     },
 
     getDom: function() {
@@ -81,7 +82,6 @@ Module.register('MMM-PhillipsHueController', {
             outer_wrapper.className = 'normal regular small';
             return outer_wrapper;
         }
-
         // show loading message
         if (!this.loaded) {
             outer_wrapper.innerHTML = 'Loading ...';
@@ -89,23 +89,12 @@ Module.register('MMM-PhillipsHueController', {
             return outer_wrapper;
         }
 
-        if (displayType === 'list') {
-            // list mode view
-
-            outer_wrapper.className = this.classNames(
-                'hue-wrapper',
-                'list',
-                alignment,
-                minimalList ? 'minimal' : '',
-                displayMode === 'groups' ? 'groups' : '',
-                !coloredList ? 'bw' : ''
-            );
-            outer_wrapper.innerHTML = this.renderList();
-
-        } else {
-            // grid mode view
-
-            outer_wrapper.className = this.classNames(
+        this.renderGrid();
+        // grid mode view
+        var self = this;
+        this.hbDataArr.forEach(function(hbData) {
+            var room_wrapper = document.createElement('div');
+            room_wrapper.className = self.classNames(
                 'hue-wrapper',
                 'grid',
                 minimalGrid ? 'minimal' : '',
@@ -113,184 +102,24 @@ Module.register('MMM-PhillipsHueController', {
                 minimalGridUltra ? alignment : '',
                 displayMode === 'groups' ? 'groups' : ''
             );
-            outer_wrapper.innerHTML = this.renderGrid();
 
-        }
+            var hbTemplate = Handlebars.templates['hue_grid.hbs'];
+            var hbHtml     = hbTemplate(hbData);
+            room_wrapper.innerHTML = hbHtml;
+
+            room_wrapper.addEventListener("click", function () {
+                self.roomClicked(hbData.rows[0].name);
+            });
+
+            outer_wrapper.appendChild(room_wrapper);
+        })
 
         return outer_wrapper;
     },
 
-    renderList: function() {
-
-        var self = this;
-
-        var isLights = (this.config.displayMode === 'lights');
-        var hideOff = this.config.hideOff;
-        var minimalList = this.config.minimalList;
-        var alignment = this.config.alignment;
-        var orderByName = this.config.orderByName;
-
-        var lights = this.lights;
-        var groups = this.groups;
-
-        var hiddenOffItems = false;
-
-        // create handlebars data object
-        var hbData = {
-            isRightAligned: alignment === 'right',
-            isMinimal: minimalList,
-            c2Title: isLights ? 'Light' : 'Group',
-            c3Title: isLights ? 'Product' : 'Lights',
-            c4Title: 'Type',
-            rows: []
-        };
-
-        var data = isLights ? lights : groups;
-        var dataArr = Object.values(data); // convert to array
-
-        // sort by name if orderByName is true
-        if (orderByName) {
-            dataArr.sort((a, b) => (a.name > b.name) ? 1 : -1);
-        }
-
-        dataArr.forEach(function(item) {
-
-            var itemColorData = isLights ? item.state : item.action;
-
-            var isOn = false;
-            var allOn = false;
-            var anyOn = false;
-
-            if (isLights) {
-                isOn = itemColorData.on;
-                allOn = isOn;
-                anyOn = isOn;
-            } else {
-                allOn = item.state.all_on;
-                anyOn = item.state.any_on;
-                isOn = allOn || anyOn;
-            }
-
-            if ((hideOff && isOn) || (!hideOff)) {
-                hbData.rows.push(self.formatListRow(item));
-            } else {
-                hiddenOffItems = true;
-            }
-
-        });
-
-        if (hiddenOffItems && hbData.rows.length < 1) {
-
-            // user's lights or groups are all off
-            return '<div class="normal regular small">All your Hue lights are off.</div>';
-
-        } else {
-
-            // generate html from template
-
-            var hbTemplate = Handlebars.templates['hue_list_table.hbs'];
-            var hbHtml     = hbTemplate(hbData);
-
-            return hbHtml;
-
-        }
-
-    },
-
-    formatListRow: function(item) {
-        // generates a single light or group object
-        // only used in the list view
-
-        var isLights = (this.config.displayMode === 'lights');
-        var coloredList = this.config.coloredList;
-
-        var lights = this.lights;
-        var groups = this.groups;
-
-        var itemColorData = isLights ? item.state : item.action;
-        var type = item.type;
-        var name = item.name;
-
-        var isOn = false;
-        var allOn = false;
-        var anyOn = false;
-        var lightsOn = 0;
-        var lightText = false;
-
-        if (isLights) {
-            // lights
-
-            isOn = itemColorData.on;
-            allOn = isOn;
-            anyOn = isOn;
-
-        } else {
-            // groups
-
-            allOn = item.state.all_on;
-            anyOn = item.state.any_on;
-            isOn = allOn || anyOn;
-
-            var groupLights = item.lights;
-            for (j = 0; j < groupLights.length; j++) {
-                var lightId = groupLights[j];
-                var light = this.lights[lightId];
-                if (light) {
-                    if (light.state.on) {
-                        lightsOn++;
-                    }
-                }
-            }
-
-            if (allOn) {
-                lightText = 'All lights are on';
-            } else if (anyOn) {
-                if (lightsOn > 1) {
-                    lightText = lightsOn + ' lights are on';
-                } else {
-                    lightText = lightsOn + ' light is on';
-                }
-            } else {
-                lightText = 'All lights are off';
-            }
-
-        }
-
-        var mainLight = isLights ? item : { state: itemColorData };
-        var mainLightColor = this.getHueColorStyle(mainLight);
-        var mainLightStyle = mainLightColor.colorStyle;
-
-        if (!mainLightStyle) {
-            isOn = false;
-        }
-
-        if (!coloredList) {
-            mainLightStyle = false;
-        }
-
-        var rowClass = isOn? 'on' : 'off';
-        var rowStyles = isOn ? mainLightStyle : false;
-        var c2Text = isOn ? '<i class="fa fa-lightbulb-o"></i>' : '<i class="fa fa-power-off"></i>';
-        var c2Class = false;
-        var c3Text = isLights? item.productname : lightText;
-        var c3Class = false;
-        var c4Text = item.type;
-        var c4Class = false;
-
-        var row = {
-            rowClass,
-            rowStyles,
-            name,
-            c2Text,
-            c2Class,
-            c3Text,
-            c3Class,
-            c4Text,
-            c4Class
-        };
-
-        return row;
-
+    roomClicked: function(roomName) {
+        console.log("clicked button for room: ")
+        console.log(roomName)
     },
 
     renderGrid: function() {
@@ -311,15 +140,9 @@ Module.register('MMM-PhillipsHueController', {
 
         var hiddenOffItems = false;
 
-        // create handlebars data object
-
-        var hbData = {
-            rows: []
-        };
-
         // create rows
 
-        var data = isLights ? lights : groups;
+        var data = groups;
         var dataArr = Object.values(data); // convert to array
 
         // sort by name if orderByName is true
@@ -328,6 +151,9 @@ Module.register('MMM-PhillipsHueController', {
         }
 
         dataArr.forEach(function(item) {
+            var hbData = {
+                rows: []
+            };
 
             var itemColorData = isLights ? item.state : item.action;
             var type = item.type.toLowerCase();
@@ -341,23 +167,9 @@ Module.register('MMM-PhillipsHueController', {
             var itemBrightnessStyle = '';
             var lightText = false;
 
-            if (isLights) {
-                // lights
-
-                isOn = itemColorData.on;
-                allOn = isOn;
-                anyOn = isOn;
-
-                itemBrightness = itemColorData.bri; // value from 0 to 254
-
-            } else {
-                // groups
-
-                allOn = item.state.all_on;
-                anyOn = item.state.any_on;
-                isOn = allOn || anyOn;
-
-            }
+            allOn = item.state.all_on;
+            anyOn = item.state.any_on;
+            isOn = allOn || anyOn;
 
             // calculate colors for gradient or solid background
 
@@ -386,118 +198,99 @@ Module.register('MMM-PhillipsHueController', {
                     }
                 }
 
-                if (isLights) {
-                    // solid background for lights
+                // gradient background for groups
 
-                    lightsOn = 1;
-                    colorStyle = 'background-color: ' + mainLightColor.colorHex + ';';
+                var colorRgbArr = [];
+                var groupLights = item.lights;
 
-                } else {
-                    // gradient background for groups
-
-                    var colorRgbArr = [];
-                    var groupLights = item.lights;
-
-                    for (j = 0; j < groupLights.length; j++) {
-                        var lightId = groupLights[j];
-                        var light = self.lights[lightId];
-                        if (light) {
-                            if (light.state.on) {
-                                itemBrightness += light.state.bri;
-                                var lightColor = self.getHueColorStyle(light);
-                                if (lightColor.colorHex) {
-                                    colorRgbArr.push([
-                                        lightColor.colorRgb.r,
-                                        lightColor.colorRgb.g,
-                                        lightColor.colorRgb.b
-                                    ]);
-                                }
+                for (j = 0; j < groupLights.length; j++) {
+                    var lightId = groupLights[j];
+                    var light = self.lights[lightId];
+                    if (light) {
+                        if (light.state.on) {
+                            itemBrightness += light.state.bri;
+                            var lightColor = self.getHueColorStyle(light);
+                            if (lightColor.colorHex) {
+                                colorRgbArr.push([
+                                    lightColor.colorRgb.r,
+                                    lightColor.colorRgb.g,
+                                    lightColor.colorRgb.b
+                                ]);
                             }
                         }
                     }
+                }
 
-                    if (colorRgbArr.length > 0) {
-                        // create gradient background color
+                if (colorRgbArr.length > 0) {
+                    // create gradient background color
 
-                        var colorPercent = 100;
+                    var colorPercent = 100;
 
-                        // sort colors (be aware that this removes duplicate colors)
-                        var colorRgbSortedArr = (colorRgbArr.length > 1) ? self.sortColors(colorRgbArr) : colorRgbArr;
+                    // sort colors (be aware that this removes duplicate colors)
+                    var colorRgbSortedArr = (colorRgbArr.length > 1) ? self.sortColors(colorRgbArr) : colorRgbArr;
 
-                        if (typeof colorRgbSortedArr === 'undefined') {
-                            // all colors are the same
-                            colorRgbSortedArr = colorRgbArr;
-                        }
+                    if (typeof colorRgbSortedArr === 'undefined') {
+                        // all colors are the same
+                        colorRgbSortedArr = colorRgbArr;
+                    }
 
-                        // set percentage
+                    // set percentage
+                    if (colorRgbSortedArr.length > 1) {
+                        colorPercent = Math.round(100/parseInt((colorRgbSortedArr.length - 1)));
+                    }
+
+                    // override contrast settings based on sorted colors
+                    contrast = self.contrast([255, 255, 255], [colorRgbSortedArr[0][0], colorRgbSortedArr[0][1], colorRgbSortedArr[0][2]]);
+                    if (contrast <= 2.0) {
+                        // use dark text color
+                        lightOrDark = 'dark';
+                    } else {
+                        // use light text color
+                        lightOrDark = 'light';
+                    }
+
+                    lightsOn = colorRgbArr.length;
+
+                    for (j = 0; j < colorRgbSortedArr.length; j++) {
+
                         if (colorRgbSortedArr.length > 1) {
-                            colorPercent = Math.round(100/parseInt((colorRgbSortedArr.length - 1)));
-                        }
-
-                        // override contrast settings based on sorted colors
-                        contrast = self.contrast([255, 255, 255], [colorRgbSortedArr[0][0], colorRgbSortedArr[0][1], colorRgbSortedArr[0][2]]);
-                        if (contrast <= 2.0) {
-                            // use dark text color
-                            lightOrDark = 'dark';
-                        } else {
-                            // use light text color
-                            lightOrDark = 'light';
-                        }
-
-                        lightsOn = colorRgbArr.length;
-
-                        for (j = 0; j < colorRgbSortedArr.length; j++) {
-
-                            if (colorRgbSortedArr.length > 1) {
-                                // background gradient
-                                if (j == 0) {
-                                    colorStyle = 'background: linear-gradient(to right, ' + self.rgbToHexAlt(colorRgbSortedArr[j]) + ' 0%';
-                                } else {
-                                    colorStyle += ', ' + self.rgbToHexAlt(colorRgbSortedArr[j]) + ' ' + (colorPercent * j) + '%';
-                                }
+                            // background gradient
+                            if (j == 0) {
+                                colorStyle = 'background: linear-gradient(to right, ' + self.rgbToHexAlt(colorRgbSortedArr[j]) + ' 0%';
                             } else {
-                                // solid background color
-                                colorStyle = 'background-color: ' + self.rgbToHexAlt(colorRgbSortedArr[j]) + ';';
+                                colorStyle += ', ' + self.rgbToHexAlt(colorRgbSortedArr[j]) + ' ' + (colorPercent * j) + '%';
                             }
-
+                        } else {
+                            // solid background color
+                            colorStyle = 'background-color: ' + self.rgbToHexAlt(colorRgbSortedArr[j]) + ';';
                         }
-
-                        if (colorRgbSortedArr.length > 1) {
-                            colorStyle += ');';
-                        }
-
-                        itemBrightness = itemBrightness / lightsOn;
 
                     }
+
+                    if (colorRgbSortedArr.length > 1) {
+                        colorStyle += ');';
+                    }
+
+                    itemBrightness = itemBrightness / lightsOn;
 
                 }
+
 
             } else if (isOn) {
                 // white lights
+                // groups
+                var groupLights = item.lights;
 
-                if (isLights) {
-                    // lights
-
-                    lightsOn = 1;
-
-                } else {
-                    // groups
-
-                    var groupLights = item.lights;
-
-                    for (j = 0; j < groupLights.length; j++) {
-                        var lightId = groupLights[j];
-                        var light = self.lights[lightId];
-                        if (light) {
-                            if (light.state.on) {
-                                itemBrightness += light.state.bri;
-                                lightsOn++;
-                            }
+                for (j = 0; j < groupLights.length; j++) {
+                    var lightId = groupLights[j];
+                    var light = self.lights[lightId];
+                    if (light) {
+                        if (light.state.on) {
+                            itemBrightness += light.state.bri;
+                            lightsOn++;
                         }
                     }
-
                 }
-
             }
 
             // calculate brightness value in percent
@@ -516,19 +309,16 @@ Module.register('MMM-PhillipsHueController', {
             }
 
             // set light text (only relevant for groups)
-
-            if (!isLights) {
-                if (allOn) {
-                    lightText = 'All lights are on';
-                } else if (anyOn) {
-                    if (lightsOn > 1) {
-                        lightText = lightsOn + ' lights are on';
-                    } else {
-                        lightText = lightsOn + ' light is on';
-                    }
+            if (allOn) {
+                lightText = 'All lights are on';
+            } else if (anyOn) {
+                if (lightsOn > 1) {
+                    lightText = lightsOn + ' lights are on';
                 } else {
-                    lightText = 'All lights are off';
+                    lightText = lightsOn + ' light is on';
                 }
+            } else {
+                lightText = 'All lights are off';
             }
 
             // set class for row
@@ -559,24 +349,21 @@ Module.register('MMM-PhillipsHueController', {
                 hbData.rows.push(rowObj);
             }
 
+            // Push hbData into storage array
+            self.hbDataArr.push(hbData);
         });
 
-        if (hiddenOffItems && hbData.rows.length < 1) {
 
-            // user's lights or groups are all off
-            return '<div class="normal regular small">All your Hue lights are off.</div>';
+        // generate html from template
+        var container = document.createElement("div");
+        container.className = "master-container";
 
-        } else {
+        var da
 
-            // generate html from template
 
-            var hbTemplate = Handlebars.templates['hue_grid.hbs'];
-            var hbHtml     = hbTemplate(hbData);
+        container = da;
 
-            return hbHtml;
-
-        }
-
+        return container;
     },
 
     getData: function() {
