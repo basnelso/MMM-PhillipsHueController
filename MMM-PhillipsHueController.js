@@ -15,21 +15,11 @@ Module.register('MMM-PhillipsHueController', {
         bridgeIp: '',
         user: '',
         displayType: 'grid',
-        displayMode: 'lights',
+        displayMode: 'groups',
         displayFilter: ['all'],
         hideFilter: [],
-        hideOff: false,
-        alignment: 'left',
-        coloredList: true,
-        minimalList: false,
-        minimalGrid: false,
-        minimalGridUltra: false,
         orderByName: false,
-        motionSleep: false,
-        motionSleepSeconds: 300, // this is in seconds (not ms)
-        updateInterval: 2 * 60 * 1000,
-        animationSpeed: 2 * 1000,
-        initialLoadDelay: 0,
+        updateInterval: 10,
         version: '1.4.0'
     },
 
@@ -53,7 +43,8 @@ Module.register('MMM-PhillipsHueController', {
         this.errMsg = '';
 
         this.loaded = false;
-        this.scheduleUpdate(this.config.initialLoadDelay);
+        this.getData();
+        this.scheduleUpdate();
 
         this.sleepTimer = null;
         this.sleeping = false;
@@ -61,19 +52,12 @@ Module.register('MMM-PhillipsHueController', {
         this.lights = {};
         this.groups = {};
 
+        this.groupNumLookup = {};
+
         this.hbDataArr = [];
     },
 
     getDom: function() {
-
-        var displayType = this.config.displayType;
-        var displayMode = this.config.displayMode;
-        var alignment = this.config.alignment;
-        var minimalList = this.config.minimalList;
-        var minimalGrid = this.config.minimalGrid;
-        var minimalGridUltra = (displayMode === 'lights') ? this.config.minimalGridUltra : false;
-        var coloredList = this.config.coloredList;
-
         var outer_wrapper = document.createElement('div');
 
         // show error message
@@ -90,17 +74,13 @@ Module.register('MMM-PhillipsHueController', {
         }
 
         this.renderGrid();
-        // grid mode view
         var self = this;
         this.hbDataArr.forEach(function(hbData) {
             var room_wrapper = document.createElement('div');
             room_wrapper.className = self.classNames(
                 'hue-wrapper',
                 'grid',
-                minimalGrid ? 'minimal' : '',
-                minimalGridUltra ? 'minimal-ultra' : '',
-                minimalGridUltra ? alignment : '',
-                displayMode === 'groups' ? 'groups' : ''
+                'groups'
             );
 
             var hbTemplate = Handlebars.templates['hue_grid.hbs'];
@@ -118,27 +98,51 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     roomClicked: function(roomName) {
-        console.log("clicked button for room: ")
-        console.log(roomName)
+        let groupNum = this.groupNumLookup[roomName];
+        var room = Object.values(this.groups)[groupNum - 1];
+        var anyOn = room.state.any_on;
+        if (anyOn) {
+            this.turnOffLights(groupNum);
+        } else {
+            this.turnOnLights(groupNum);
+        }
+    },
+
+    turnOffLights: function(groupNum) {
+        const hueUrl = `http://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
+        payload = {
+            "url": hueUrl,
+            "num": groupNum
+        }
+        this.sendSocketNotification('TURN_OFF_LIGHTS', payload);
+    },
+
+    turnOffLightsLocally: function(groupNum) {
+        this.groups[groupNum].state.all_on = false;
+        this.groups[groupNum].state.any_on = false;
+        this.updateDom();
+    },
+
+    turnOnLights: function(groupNum) {
+        const hueUrl = `http://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
+        payload = {
+            "url": hueUrl,
+            "num": groupNum
+        }
+        this.sendSocketNotification('TURN_ON_LIGHTS', payload);
+    },
+
+    turnOnLightsLocally: function(groupNum) {
+        this.groups[groupNum].state.all_on = true;
+        this.groups[groupNum].state.any_on = true;
+        this.updateDom();
     },
 
     renderGrid: function() {
 
-        var self = this;
-
-        var isLights = (this.config.displayMode === 'lights');
-        var minimalGrid = this.config.minimalGrid;
-        var minimalGridUltra = isLights ? this.config.minimalGridUltra : false;
-        var hideOff = this.config.hideOff;
         var orderByName = this.config.orderByName;
 
-        var lights = this.lights;
         var groups = this.groups;
-
-        var numberOfLights = Object.keys(lights).length;
-        var numberOfGroups = Object.keys(groups).length;
-
-        var hiddenOffItems = false;
 
         // create rows
 
@@ -150,12 +154,15 @@ Module.register('MMM-PhillipsHueController', {
             dataArr.sort((a, b) => (a.name > b.name) ? 1 : -1);
         }
 
+        var group = 1;
+        this.hbDataArr = [];
+        var self = this;
         dataArr.forEach(function(item) {
             var hbData = {
                 rows: []
             };
 
-            var itemColorData = isLights ? item.state : item.action;
+            var itemColorData = item.action;
             var type = item.type.toLowerCase();
 
             var isOn = false;
@@ -185,7 +192,7 @@ Module.register('MMM-PhillipsHueController', {
 
                 // calculate contrast so we know whether to show a light or dark text
 
-                var mainLight = isLights ? item : { state: itemColorData };
+                var mainLight = { state: itemColorData };
                 var mainLightColor = self.getHueColorStyle(mainLight);
                 if (mainLightColor.colorRgb) {
                     contrast = self.contrast([255, 255, 255], [mainLightColor.colorRgb.r, mainLightColor.colorRgb.g, mainLightColor.colorRgb.b]);
@@ -332,8 +339,8 @@ Module.register('MMM-PhillipsHueController', {
 
             var rowObj = {
                 isOn: isOn,
-                isMinimal: minimalGrid || minimalGridUltra ? true : false,
-                isMinimalUltra: minimalGridUltra,
+                isMinimal: false,
+                isMinimalUltra: false,
                 name: item.name,
                 class: itemClass,
                 colorStyle,
@@ -341,13 +348,10 @@ Module.register('MMM-PhillipsHueController', {
                 itemBrightnessStyle
             };
 
-            if (hideOff && !isOn) {
-                hiddenOffItems = true;
-            }
+            self.groupNumLookup[item.name] = group
+            group++;
 
-            if ((hideOff && isOn) || (!hideOff)) {
-                hbData.rows.push(rowObj);
-            }
+            hbData.rows.push(rowObj);
 
             // Push hbData into storage array
             self.hbDataArr.push(hbData);
@@ -367,12 +371,10 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     getData: function() {
-
         if (!this.sleeping) {
-
             if ((this.config.bridgeIp === '') || (this.config.user === '')) {
                 this.errMsg = 'Please add your Hue bridge IP and user to the MagicMirror config.js file.';
-                this.updateDom(this.config.animationSpeed);
+                this.updateDom();
             } else {
                 this.sendSocketNotification('MMM_HUE_LIGHTS_GET', {
                     bridgeIp: this.config.bridgeIp,
@@ -384,38 +386,17 @@ Module.register('MMM-PhillipsHueController', {
 
     },
 
-    notificationReceived(notification, payload, sender) {
-
-        var self = this;
-
-        if ((notification === 'USER_PRESENCE') && (this.config.motionSleep)) {
-
-            if (payload === true) {
-                if (this.sleeping) {
-                    this.show(this.config.animationSpeed);
-                } else {
-                    clearTimeout(this.sleepTimer);
-                    this.sleepTimer = setTimeout(function() {
-                        self.hide(self.config.animationSpeed);
-                    }, self.config.motionSleepSeconds * 1000);
-                }
-            }
-
-        }
-
-    },
-
     socketNotificationReceived: function(notification, payload) {
-
-        var self = this;
-
         if (notification === 'MMM_HUE_LIGHTS_DATA') {
-            self.processHueData(payload);
+            this.processHueData(payload);
         } else if (notification === 'MMM_HUE_LIGHTS_DATA_ERROR') {
-            self.errMsg = payload;
-            self.updateDom(self.config.animationSpeed);
+            this.errMsg = payload;
+            this.updateDom();
+        } else if (notification === 'LIGHTS_TURNED_ON') {
+            this.turnOnLightsLocally(payload);
+        } else if (notification === 'LIGHTS_TURNED_OFF') {
+            this.turnOffLightsLocally(payload);
         }
-        self.scheduleUpdate(self.config.updateInterval);
     },
 
     suspend: function() {
@@ -436,14 +417,6 @@ Module.register('MMM-PhillipsHueController', {
 
             // get new data
             this.getData();
-
-            // restart timer
-            if (this.config.motionSleep) {
-                clearTimeout(this.sleepTimer);
-                this.sleepTimer = setTimeout(function() {
-                    self.hide(self.config.animationSpeed);
-                }, self.config.motionSleepSeconds * 1000);
-            }
         }
 
     },
@@ -592,7 +565,6 @@ Module.register('MMM-PhillipsHueController', {
 
         // check old data to make sure we're not re-rendering the UI for no reason
         if (this.loaded) {
-
             if (numberOfOldLights !== numberOfLights) {
                 // number of lights changed (update dom)
             } else if (numberOfOldGroups !== numberOfGroups) {
@@ -613,7 +585,6 @@ Module.register('MMM-PhillipsHueController', {
         this.groups = groups;
 
         if (renderUi) {
-
             if (itemsFilteredOut > 0) {
                 if ((displayMode === 'lights') && (numberOfLights === 0)) {
                     this.errMsg = 'No Hue lights were found<br>with the filter(s) you specified.';
@@ -628,10 +599,8 @@ Module.register('MMM-PhillipsHueController', {
                 this.errMsg = '';
             }
 
-            this.updateDom(this.config.animationSpeed);
-
+            this.updateDom();
         }
-
     },
 
     getHueColorStyle: function(item) {
@@ -730,7 +699,6 @@ Module.register('MMM-PhillipsHueController', {
 
     XYtoRGB: function(x, y, brightness) {
         // convert X, Y, bri colors to RGB
-
         if (brightness === undefined) {
             brightness = 254;
         }
@@ -826,7 +794,6 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     luminanace: function(r,g,b) {
-
         var a = [r, g, b].map(function (v) {
             v /= 255;
             return v <= 0.03928
@@ -839,7 +806,6 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     contrast: function(rgb1,rgb2) {
-
         l1 = this.luminanace(rgb1[0], rgb1[1], rgb1[2]) + 0.05;
         l2 = this.luminanace(rgb2[0], rgb2[1], rgb2[2]) + 0.05;
 
@@ -847,7 +813,6 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     rgbToHsl: function(c) {
-
         var r = c[0]/255, g = c[1]/255, b = c[2]/255;
         var max = Math.max(r, g, b), min = Math.min(r, g, b);
         var h, s, l = (max + min) / 2;
@@ -880,7 +845,6 @@ Module.register('MMM-PhillipsHueController', {
 
     sortColors: function(colors) {
         // Calculate distance between each color
-
         var distances = [];
 
         for (var i = 0; i < colors.length; i++) {
@@ -904,7 +868,6 @@ Module.register('MMM-PhillipsHueController', {
         var lastCluster;
 
         for (var i = 0; i < distances.length; i++) {
-
             var color1 = distances[i][0];
             var color2 = distances[i][1];
 
@@ -938,7 +901,6 @@ Module.register('MMM-PhillipsHueController', {
 
         // By now all colors should be in one cluster
         return lastCluster;
-
     },
 
     rgbToHex: function(rgb) {
@@ -951,17 +913,11 @@ Module.register('MMM-PhillipsHueController', {
         return '#' + ((1 << 24) + (rgb[0] << 16) + (rgb[1] << 8) + rgb[2]).toString(16).slice(1);
     },
 
-    scheduleUpdate: function(delay) {
-
-        var nextLoad = this.config.updateInterval;
-        if (typeof delay !== 'undefined' && delay >= 0) {
-            nextLoad = delay;
-        }
-
+    scheduleUpdate: function() {
         var self = this;
-        setTimeout(function() {
+        setInterval(() => {
             self.getData();
-        }, nextLoad);
+        }, self.config.updateInterval);
     }
 
 });

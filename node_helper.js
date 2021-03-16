@@ -1,5 +1,6 @@
 var NodeHelper = require('node_helper');
 var request = require('request');
+const fetch = require('node-fetch');
 
 module.exports = NodeHelper.create({
 
@@ -7,8 +8,39 @@ module.exports = NodeHelper.create({
         console.log('Starting node_helper for module [' + this.name + ']');
     },
 
-    socketNotificationReceived: function(notification, payload) {
+    turnOffAllLights: function (payload) {
+        var self = this;
+        fetch(payload.url, {
+            method: 'PUT',
+            body: JSON.stringify({
+                "on": false
+            })    
+        })
+        .then(results => {
+            self.sendSocketNotification("LIGHTS_TURNED_OFF", payload.num);
+        })
+        .catch((error) => {
+            self.sendSocketNotification("LIGHTS_TURNED_OFF", error);
+        });
+    },
 
+    turnOnAllLights: function(payload) {
+        let self = this;
+        fetch(payload.url, {
+            method: 'PUT',
+            body: JSON.stringify({
+                "on": true
+            })    
+        })
+        .then(results => {
+            self.sendSocketNotification("LIGHTS_TURNED_ON", payload.num);
+        })
+        .catch((error) => {
+            self.sendSocketNotification("LIGHTS_TURNED_ON", error);
+        });
+    },
+
+    socketNotificationReceived: function(notification, payload) {
         if (notification === 'MMM_HUE_LIGHTS_GET') {
 
             var bridgeIp = payload.bridgeIp;
@@ -32,6 +64,10 @@ module.exports = NodeHelper.create({
 
             });
 
+        } else if (notification === "TURN_OFF_LIGHTS") {
+            this.turnOffAllLights(payload);
+        } else if (notification === "TURN_ON_LIGHTS") {
+            this.turnOnAllLights(payload);
         }
     }
 
