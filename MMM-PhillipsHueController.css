@@ -1,3 +1,23 @@
+.outer-wrapper {
+    display: grid;
+    grid-template-columns: auto auto;
+}
+
+.MMM-PhillipsHueController .grid {
+    width: auto;
+    display: flex;
+    flex-flow: row wrap;
+    margin: -10px;
+    max-width: none;
+    justify-content: center;
+}
+
+.MMM-PhillipsHueController .grid .hue {
+    width: calc(100% - 20px);
+    margin: 10px;
+    display: block;
+}
+
 .MMM-PhillipsHueController .hue-wrapper.left {
     justify-content: flex-start;
 }
@@ -21,57 +41,6 @@
 .MMM-PhillipsHueController .hue-wrapper.right .hue-list {
     text-align: right;
 }
-
-
-/*
-    LIST VIEW
-*/
-
-.MMM-PhillipsHueController .hue-list .off {
-    opacity: 0.5;
-}
-
-.MMM-PhillipsHueController .hue-list th {
-    color: #fff;
-}
-
-.MMM-PhillipsHueController .bw .hue-list .off td {
-    color: #aaa;
-}
-
-.MMM-PhillipsHueController .bw .hue-list .on td {
-    color: #fff;
-}
-
-.MMM-PhillipsHueController .hue-list th.icon,
-.MMM-PhillipsHueController .hue-list td.icon {
-    width: 25px;
-}
-
-.MMM-PhillipsHueController .hue-list .icn-bulb {
-    background-image: url('icons/hue-bulb-light.svg');
-    background-size: 100% 100%;
-    width: 12px;
-    height: 16px;
-    vertical-align: middle;
-    display: inline-block;
-}
-
-.MMM-PhillipsHueController .hue-list .off .icn-bulb {
-    opacity: 0.5;
-}
-
-.MMM-PhillipsHueController .groups .hue-list .icn-bulb {
-    background-image: url('icons/hue-groups-light.svg');
-    width: 17px;
-    height: 16px;
-}
-
-.MMM-PhillipsHueController .groups .hue-list th.icon,
-.MMM-PhillipsHueController .groups .hue-list td.icon {
-    width: 30px;
-}
-
 
 /*
     GRID VIEW - REGULAR
@@ -271,57 +240,3 @@
 .MMM-PhillipsHueController .grid .hue .toggle {
     width: 100%;
 }
-
-
-/*
-    GRID VIEW - MINIMAL
-*/
-
-.MMM-PhillipsHueController .grid.minimal .hue {
-    border-radius: 4px;
-    margin-bottom: 2px;
-}
-
-.MMM-PhillipsHueController .grid.minimal .hue .title {
-    width: 90%;
-    padding: 10px 0;
-}
-
-.MMM-PhillipsHueController .grid.minimal .hue.off .icn-bulb,
-.MMM-PhillipsHueController .grid.minimal .hue.off .title {
-    opacity: 0.7;
-}
-
-.MMM-PhillipsHueController .grid.minimal .hue .icn {
-    width: 15px;
-    height: 20px;
-    margin-right: 10px;
-}
-
-.MMM-PhillipsHueController .grid.groups.minimal .hue .icn {
-    width: 21px;
-    height: 20px;
-}
-
-/*
-    GRID VIEW - ULTRA MINIMAL
-*/
-
-.MMM-PhillipsHueController .grid.minimal-ultra {
-    display: flex;
-    flex-flow: row wrap;
-    margin: -4px;
-}
-
-.MMM-PhillipsHueController .grid.minimal-ultra .hue {
-    border-radius: 4px;
-    width: 28px;
-    height: 28px;
-    margin: 4px;
-}
-
-.MMM-PhillipsHueController .grid.minimal-ultra .hue .top {
-    display: none;
-}
-
-

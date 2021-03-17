@@ -59,18 +59,17 @@ Module.register('MMM-PhillipsHueController', {
 
     getDom: function() {
         var outer_wrapper = document.createElement('div');
-
         // show error message
         if (this.errMsg !== '') {
             outer_wrapper.innerHTML = this.errMsg;
-            outer_wrapper.className = 'normal regular small';
+            outer_wrapper.className = ' normal regular small ';
             return outer_wrapper;
-        }
-        // show loading message
-        if (!this.loaded) {
+        } else if (!this.loaded) {
             outer_wrapper.innerHTML = 'Loading ...';
             outer_wrapper.className = 'bright light small';
             return outer_wrapper;
+        } else {
+            outer_wrapper.className = 'outer-wrapper';
         }
 
         this.renderGrid();
@@ -699,6 +698,7 @@ Module.register('MMM-PhillipsHueController', {
 
     XYtoRGB: function(x, y, brightness) {
         // convert X, Y, bri colors to RGB
+
         if (brightness === undefined) {
             brightness = 254;
         }
