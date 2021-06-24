@@ -98,7 +98,9 @@ Module.register('MMM-PhillipsHueController', {
 
     roomClicked: function(roomName) {
         let groupNum = this.groupNumLookup[roomName];
-        var room = Object.values(this.groups)[groupNum - 1];
+        console.log('room num lookup', this.groupNumLookup)
+        console.log('groups are', this.groups)
+        var room = this.groups[groupNum];
         var anyOn = room.state.any_on;
         if (anyOn) {
             this.turnOffLights(groupNum);
@@ -143,6 +145,7 @@ Module.register('MMM-PhillipsHueController', {
         var orderByName = this.config.orderByName;
 
         var groups = this.groups;
+        console.log(groups)
 
         // create rows
 
@@ -154,10 +157,10 @@ Module.register('MMM-PhillipsHueController', {
             dataArr.sort((a, b) => (a.name > b.name) ? 1 : -1);
         }
 
-        var group = 1;
         this.hbDataArr = [];
         var self = this;
-        dataArr.forEach(function(item) {
+        for (const [groupNumber, item] of Object.entries(groups)) {
+            console.log('initial item is', item);
             var hbData = {
                 rows: []
             };
@@ -348,14 +351,14 @@ Module.register('MMM-PhillipsHueController', {
                 itemBrightnessStyle
             };
 
-            self.groupNumLookup[item.name] = group
-            group++;
+            console.log('creating an item for', item)
+            self.groupNumLookup[item.name] = parseInt(groupNumber);
 
             hbData.rows.push(rowObj);
 
             // Push hbData into storage array
             self.hbDataArr.push(hbData);
-        });
+        }
 
 
         // generate html from template
