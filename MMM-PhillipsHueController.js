@@ -141,25 +141,17 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     renderGrid: function() {
-
-        var orderByName = this.config.orderByName;
-
         var groups = this.groups;
-        console.log(groups)
 
-        // create rows
-
-        var data = groups;
-        var dataArr = Object.values(data); // convert to array
-
-        // sort by name if orderByName is true
-        if (orderByName) {
-            dataArr.sort((a, b) => (a.name > b.name) ? 1 : -1);
+        var dataArr = [];
+        for (const tuple of Object.entries(groups)) {
+            dataArr.push(tuple);
         }
+        dataArr.sort((t1, t2) => (this.config.displayFilter.indexOf(t1[1].name) > this.config.displayFilter.indexOf(t2[1].name)) ? 1 : -1);
 
         this.hbDataArr = [];
         var self = this;
-        for (const [groupNumber, item] of Object.entries(groups)) {
+        for (const [groupNumber, item] of dataArr) {
             console.log('initial item is', item);
             var hbData = {
                 rows: []
@@ -425,7 +417,7 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     processHueData: function(data) {
-
+        console.log(data)
         var self = this;
 
         var displayMode = this.config.displayMode;
@@ -447,7 +439,7 @@ Module.register('MMM-PhillipsHueController', {
 
         Object.keys(data.groups).forEach(function(key) {
             var itemType = data.groups[key].type.toLowerCase();
-            if (itemType !== 'room') {
+            if (!(itemType === 'room' || itemType === 'zone')) {
                 delete data.groups[key];
             }
         });
