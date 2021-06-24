@@ -108,6 +108,7 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     turnOffLights: function(groupNum) {
+        console.log('turning off lights for group:', groupNum)
         const hueUrl = `http://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
         payload = {
             "url": hueUrl,
