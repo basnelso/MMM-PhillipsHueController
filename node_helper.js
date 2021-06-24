@@ -48,6 +48,7 @@ module.exports = NodeHelper.create({
 
             var url = 'http://' + bridgeIp + '/api/' + user;
             var self = this;
+            console.log('getting data from:', url)
 
             request(url, {method: 'GET'}, function(err, res, body) {
 
