@@ -40,6 +40,43 @@ module.exports = NodeHelper.create({
         });
     },
 
+    turnOffCameraLights: function (url) {
+        var self = this;
+        fetch(url, {
+            method: 'PUT',
+            body: JSON.stringify({
+                "on": false
+            })    
+        })
+        .then(results => {
+            self.sendSocketNotification("LIGHTS_TURNED_OFF", results);
+        })
+        .catch((error) => {
+            self.sendSocketNotification("LIGHTS_TURNED_OFF", error);
+        });
+    },
+
+    turnOnCameraLights: function(url) {
+        let self = this;
+        fetch(url, {
+            method: 'PUT',
+            body: JSON.stringify({
+                "on": true
+            })    
+        })
+        .then(results => {
+            self.sendSocketNotification("LIGHTS_TURNED_ON", results);
+        })
+        .catch((error) => {
+            self.sendSocketNotification("LIGHTS_TURNED_ON", error);
+        });
+    },
+
+    setCameraLights: function(url) {
+        let self = this;
+
+    },
+
     socketNotificationReceived: function(notification, payload) {
         if (notification === 'MMM_HUE_LIGHTS_GET') {
 
@@ -68,6 +105,10 @@ module.exports = NodeHelper.create({
             this.turnOffAllLights(payload);
         } else if (notification === "TURN_ON_LIGHTS") {
             this.turnOnAllLights(payload);
+        } else if (notification == "TURN_ON_CAMERA") {
+            this.turnOnCameraLights(payload);
+        } else if (notification == "TURN_OFF_CAMERA") {
+            this.turnOffCameraLights(payload);
         }
     }
 

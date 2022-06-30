@@ -140,6 +140,35 @@ Module.register('MMM-PhillipsHueController', {
         this.updateDom();
     },
 
+    turnOffCameraLights: function() {
+        let self = this;
+
+        //Restore save state or
+        if (true) { // Do this if the lights were off before
+            console.log(`turning off camera`)
+            const hueUrl = `http://${self.config.bridgeIp}/api/${self.config.user}/groups/${self.config.group}/action`;
+            console.log(hueUrl);
+            self.sendSocketNotification('TURN_OFF_CAMERA', hueUrl);
+        } else {
+            // Restore previous light state
+            self.sendSocketNotification('SET_CAMERA', hueUrl);
+
+        }
+    },
+
+    turnOnCameraLights: function() {
+        let self = this;
+
+        if (true) { // Do this if the lights are off
+            console.log(`turning on camera`)
+            const hueUrl = `http://${self.config.bridgeIp}/api/${self.config.user}/groups/${self.config.group}/action`;
+            console.log(hueUrl);
+            self.sendSocketNotification('TURN_ON_CAMERA', hueUrl);
+        } else {
+            self.sendSocketNotification('SET_CAMERA', hueUrl);
+        }
+    },
+
     renderGrid: function() {
         var groups = this.groups;
 
@@ -382,16 +411,25 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     socketNotificationReceived: function(notification, payload) {
+
+        var self = this;
+
         if (notification === 'MMM_HUE_LIGHTS_DATA') {
-            this.processHueData(payload);
+            self.processHueData(payload);
         } else if (notification === 'MMM_HUE_LIGHTS_DATA_ERROR') {
-            this.errMsg = payload;
-            this.updateDom();
-        } else if (notification === 'LIGHTS_TURNED_ON') {
-            this.turnOnLightsLocally(payload);
-        } else if (notification === 'LIGHTS_TURNED_OFF') {
-            this.turnOffLightsLocally(payload);
+            self.errMsg = payload;
+            self.updateDom(self.config.animationSpeed);
+        } else if (notification === "LIGHTS_TURNED_OFF") {
+            console.log("TURNED OFF");
+            self.flipLocalState();
+        } else if (notification === "LIGHTS_TURNED_ON") {
+            console.log("TURNED ON");
+            self.flipLocalState();
+        } else if (notification == "CAMERA_ON") {
+            console.log("camera notification recieved");
         }
+
+        self.scheduleUpdate(self.config.updateInterval);
     },
 
     suspend: function() {
