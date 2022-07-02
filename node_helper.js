@@ -105,10 +105,8 @@ module.exports = NodeHelper.create({
             this.turnOffAllLights(payload);
         } else if (notification === "TURN_ON_LIGHTS") {
             this.turnOnAllLights(payload);
-        } else if (notification == "TURN_ON_CAMERA") {
+        } else if (notification == "SET_CAMERA") {
             this.turnOnCameraLights(payload);
-        } else if (notification == "TURN_OFF_CAMERA") {
-            this.turnOffCameraLights(payload);
         }
     }
 
