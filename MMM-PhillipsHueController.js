@@ -140,24 +140,12 @@ Module.register('MMM-PhillipsHueController', {
         this.updateDom();
     },
 
-    turnOffCameraLights: function() {
+    turnOnCamera: function() {
         let self = this;
 
-        //Restore save state or
-        if (true) { // Do this if the lights were off before
-            console.log(`turning off camera`)
-            const hueUrl = `http://${self.config.bridgeIp}/api/${self.config.user}/groups/${self.config.group}/action`;
-            console.log(hueUrl);
-            self.sendSocketNotification('TURN_OFF_CAMERA', hueUrl);
-        } else {
-            // Restore previous light state
-            self.sendSocketNotification('SET_CAMERA', hueUrl);
+        // Get current state of hue lights with get request
+        // 
 
-        }
-    },
-
-    turnOnCameraLights: function() {
-        let self = this;
 
         if (true) { // Do this if the lights are off
             console.log(`turning on camera`)
@@ -425,11 +413,17 @@ Module.register('MMM-PhillipsHueController', {
         } else if (notification === "LIGHTS_TURNED_ON") {
             console.log("TURNED ON");
             self.flipLocalState();
-        } else if (notification == "CAMERA_ON") {
-            console.log("camera notification recieved");
         }
 
         self.scheduleUpdate(self.config.updateInterval);
+    },
+
+    notificationReceived: function(notification, payload) {
+        var self = this;
+        if (notification === "CAMERA_ON") {
+            console.log("camera notification recieved");
+            self.turnOnCamera();
+        }
     },
 
     suspend: function() {
