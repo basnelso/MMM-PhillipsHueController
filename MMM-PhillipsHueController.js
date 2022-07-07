@@ -422,7 +422,7 @@ Module.register('MMM-PhillipsHueController', {
         var self = this;
         if (notification === "CAMERA_ON") {
             console.log("camera notification recieved");
-            self.turnOnCamera();
+            //self.turnOnCamera();
         }
     },
 
