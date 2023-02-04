@@ -51,6 +51,8 @@ Module.register('MMM-PhillipsHueController', {
 
         this.lights = {};
         this.groups = {};
+        this.camera21 = {};
+        this.camera22 = {};
 
         this.groupNumLookup = {};
 
@@ -391,8 +393,32 @@ Module.register('MMM-PhillipsHueController', {
             this.turnOnLightsLocally(payload);
         } else if (notification === 'LIGHTS_TURNED_OFF') {
             this.turnOffLightsLocally(payload);
+        } else if (notification == 'SEND_CAMERA_STATE') {
+            console.log("got camera state request")
+            body = {
+             "left": this.camera21,
+             "right": this.camera22
+            }
+            this.sendNotification('CAMERA_DATA', body);
         }
     },
+
+    notificationReceived: function(notification, payload, sender) {
+        if (notification == 'PICTURE_TIME') { // Recieve this from the           
+            console.log("recieved picture time notif")  
+            body = {
+                "left": this.camera21,
+                "right": this.camera22
+            };
+            console.log("sending camera state notif wiht bodY:", body)
+            self.sendNotification('CAMERA_STATE', body); // Send to photobooth app
+
+            self.sendSocketNotification('SWITCH_CAMERA_WHITE');
+        } else if (notification == 'REVERSE_BACK') { // This should have the color the lights were in the payload
+            console.log("received switch back notif with:", payload)
+            self.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
+        }
+    }
 
     suspend: function() {
         // this method is triggered when a module is hidden using this.hide()
@@ -434,6 +460,10 @@ Module.register('MMM-PhillipsHueController', {
 
         var lights = data.lights;
         var groups = data.groups;
+
+        // Before anything, grab the camera light states for picture taking
+        this.camera21 = data["lights"]["21"]["state"];
+        this.camera22 = data["lights"]["21"]["state"];
 
         // for the groups, let's immediately filter out anything that doesn't have a type of 'Room'
 

@@ -40,6 +40,92 @@ module.exports = NodeHelper.create({
         });
     },
 
+    setLightWhite: function(id) {
+        console.log("setting lights to white")
+        var idLeft = 21;
+        var idRight = 22;
+        var url1 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idLeft}/state`;
+        var url2 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idRight}/state`;
+
+        request({
+            url : url1,
+            method :"PUT",
+            headers : {
+                "content-type": "application/json",
+            },
+            body: {
+                'ct': 153
+            },
+            json: true,
+            },
+            function(err, res, body) {
+                console.log(body);
+            })
+
+        request({
+            url : url2,
+            method :"PUT",
+            headers : {
+                "content-type": "application/json",
+            },
+            body: {
+                'ct': 153
+            },
+            json: true,
+            },
+            function(err, res, body) {
+                console.log(body);
+            })
+    },
+
+    setLightColor: function(payload) {
+        console.log("setting lights back with payload:", payload)
+        var idLeft = 21;
+        var idRight = 22;
+        var url1 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idLeft}/state`;
+        var url2 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idRight}/state`;
+
+        request({
+            url : url1,
+            method :"PUT",
+            headers : {
+                "content-type": "application/json",
+            },
+            body: {
+                "bri": payload.left.bri,
+                "hue": payload.left.hue,
+                "sat": payload.left.sat,
+                "xy": payload.left.xy,
+                "ct": payload.left.ct,
+                "colormode": "xy"
+            },
+            json: true,
+            },
+            function(err, res, body) {
+                console.log(body);
+            })
+
+        request({
+            url : url2,
+            method :"PUT",
+            headers : {
+                "content-type": "application/json",
+            },
+            body: {
+                "bri": payload.right.bri,
+                "hue": payload.right.hue,
+                "sat": payload.right.sat,
+                "xy": payload.right.xy,
+                "ct": payload.right.ct,
+                "colormode": "xy"
+            },
+            json: true,
+            },
+            function(err, res, body) {
+                console.log(body);
+            })
+    },
+
     socketNotificationReceived: function(notification, payload) {
         if (notification === 'MMM_HUE_LIGHTS_GET') {
 
@@ -68,7 +154,10 @@ module.exports = NodeHelper.create({
             this.turnOffAllLights(payload);
         } else if (notification === "TURN_ON_LIGHTS") {
             this.turnOnAllLights(payload);
+        } else if (notification === "SWITCH_CAMERA_WHITE") {
+            this.setLightWhite()
+        } else if (notification === "SWITCH_CAMERA_COLOR") {
+            this.setLightColor(payload);
         }
-    }
-
+    },
 });
