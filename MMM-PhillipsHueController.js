@@ -418,7 +418,7 @@ Module.register('MMM-PhillipsHueController', {
             console.log("received switch back notif with:", payload)
             self.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
         }
-    }
+    },
 
     suspend: function() {
         // this method is triggered when a module is hidden using this.hide()
