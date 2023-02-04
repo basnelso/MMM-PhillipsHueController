@@ -48,6 +48,7 @@ Module.register('MMM-PhillipsHueController', {
 
         this.sleepTimer = null;
         this.sleeping = false;
+        this.cameraDeployed = false;
 
         this.lights = {};
         this.groups = {};
@@ -57,6 +58,7 @@ Module.register('MMM-PhillipsHueController', {
         this.groupNumLookup = {};
 
         this.hbDataArr = [];
+
     },
 
     getDom: function() {
@@ -405,7 +407,7 @@ Module.register('MMM-PhillipsHueController', {
 
     notificationReceived: function(notification, payload, sender) {
         if (notification == 'PICTURE_TIME') { // Recieve this from the           
-            console.log("recieved picture time notif")  
+            this.cameraDeployed = true; 
             body = {
                 "left": this.camera21,
                 "right": this.camera22
@@ -417,6 +419,7 @@ Module.register('MMM-PhillipsHueController', {
         } else if (notification == 'REVERSE_BACK') { // This should have the color the lights were in the payload
             console.log("received switch back notif with:", payload)
             this.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
+            this.cameraDeployed = false; 
         }
     },
 
@@ -470,6 +473,11 @@ Module.register('MMM-PhillipsHueController', {
         Object.keys(data.groups).forEach(function(key) {
             var itemType = data.groups[key].type.toLowerCase();
             if (!(itemType === 'room' || itemType === 'zone')) {
+                delete data.groups[key];
+            }
+
+            // Don't update camera lights if they are currently 'deployed'
+            if (this.cameraDeployed && itemType === 'room' && data.groups[key].name === 'Camera Lights') { // Don't update camera lights cause of a bug
                 delete data.groups[key];
             }
         });
