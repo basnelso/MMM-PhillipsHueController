@@ -404,6 +404,7 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     notificationReceived: function(notification, payload, sender) {
+        console.log('RECEIVED NOTIFICATION:', notification)
         if (notification == 'PICTURE_TIME') { // Recieve this from the           
             console.log("recieved picture time notif")  
             body = {
@@ -443,7 +444,7 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     processHueData: function(data) {
-        console.log(data)
+        //console.log(data)
         var self = this;
 
         var displayMode = this.config.displayMode;
