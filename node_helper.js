@@ -97,7 +97,7 @@ module.exports = NodeHelper.create({
                 "sat": payload.left.sat,
                 "xy": payload.left.xy,
                 "ct": payload.left.ct,
-                "colormode": "xy"
+                "colormode": payload.left.colorMode,
             },
             json: true,
             },
@@ -117,7 +117,7 @@ module.exports = NodeHelper.create({
                 "sat": payload.right.sat,
                 "xy": payload.right.xy,
                 "ct": payload.right.ct,
-                "colormode": "xy"
+                "colormode": payload.right.colorMode,
             },
             json: true,
             },
