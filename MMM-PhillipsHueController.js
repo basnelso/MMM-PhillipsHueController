@@ -406,20 +406,20 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     notificationReceived: function(notification, payload, sender) {
-        if (notification == 'PICTURE_TIME') { // Recieve this from the           
-            this.cameraDeployed = true; 
-            body = {
-                "left": this.camera21,
-                "right": this.camera22
-            };
-            console.log("sending camera state notif wiht bodY:", body)
-            this.sendNotification('CAMERA_STATE', body); // Send to photobooth app
-
-            this.sendSocketNotification('SWITCH_CAMERA_WHITE');
-        } else if (notification == 'REVERSE_BACK') { // This should have the color the lights were in the payload
-            console.log("received switch back notif with:", payload)
-            this.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
-            this.cameraDeployed = false; 
+        if (sender == 'MMM-Photobooth') {
+            if (notification == 'LIGHTS_ON' && !this.cameraDeployed) {         
+                this.cameraDeployed = true; 
+                body = {
+                    "left": this.camera21,
+                    "right": this.camera22
+                };
+                this.sendNotification('SAVE_LIGHT_STATE', body); // Send to photobooth app
+    
+                this.sendSocketNotification('SWITCH_CAMERA_WHITE');
+            } else if (notification == 'REVERSE_LIGHTS_BACK' && this.cameraDeployed) { // This should have the color the lights were in the payload
+                this.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
+                this.cameraDeployed = false; 
+            }
         }
     },
 
