@@ -475,6 +475,7 @@ Module.register('MMM-PhillipsHueController', {
             }
 
             // Don't update camera lights if they are currently 'deployed'
+            console.log("camera is deplyoed?", self.cameraDeployed)
             if (self.cameraDeployed && itemType === 'room' && data.groups[key].name === 'Camera Lights') { // Don't update camera lights cause of a bug
                 console.log("camera is deployed, so updating with:", self.lastKnownCameraColor)                
                 data.groups[key] = self.lastKnownCameraColor;
