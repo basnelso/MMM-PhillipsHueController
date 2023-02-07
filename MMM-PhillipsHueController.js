@@ -474,8 +474,8 @@ Module.register('MMM-PhillipsHueController', {
             }
 
             // Don't update camera lights if they are currently 'deployed'
-            console.log("processing data, is camera deployed?", this.cameraDeployed)
-            if (this.cameraDeployed && itemType === 'room' && data.groups[key].name === 'Camera Lights') { // Don't update camera lights cause of a bug
+            console.log("processing data, is camera deployed?", self.cameraDeployed)
+            if (self.cameraDeployed && itemType === 'room' && data.groups[key].name === 'Camera Lights') { // Don't update camera lights cause of a bug
                 console.log("camera is deployed so removing camera lights")
                 delete data.groups[key];
             } else if (itemType === 'room' && data.groups[key].name === 'Camera Lights') {
