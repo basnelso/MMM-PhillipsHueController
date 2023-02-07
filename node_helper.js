@@ -41,6 +41,7 @@ module.exports = NodeHelper.create({
     },
 
     setLightWhite: function(type) {
+        console.log("changing the color back to white")
         var ct = 153;
         if (type == 'cool') {
             ct = 153;
@@ -86,7 +87,7 @@ module.exports = NodeHelper.create({
     },
 
     setLightColor: function(payload) {
-        console.log("setting lights back with payload:", payload)
+        console.log("setting lights back to stored state, with payload:", payload)
         var idLeft = 21;
         var idRight = 22;
         var url1 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idLeft}/state`;
