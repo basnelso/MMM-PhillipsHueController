@@ -114,7 +114,6 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     turnOffLights: function(groupNum) {
-        console.log('turning off lights for group:', groupNum)
         const hueUrl = `http://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
         payload = {
             "url": hueUrl,
@@ -156,7 +155,7 @@ Module.register('MMM-PhillipsHueController', {
         this.hbDataArr = [];
         var self = this;
         for (const [groupNumber, item] of dataArr) {
-            console.log('initial item is', item);
+            //console.log('initial item is', item);
             var hbData = {
                 rows: []
             };
@@ -347,7 +346,7 @@ Module.register('MMM-PhillipsHueController', {
                 itemBrightnessStyle
             };
 
-            console.log('creating an item for', item)
+            //console.log('creating an item for', item)
             self.groupNumLookup[item.name] = parseInt(groupNumber);
 
             hbData.rows.push(rowObj);
@@ -395,27 +394,18 @@ Module.register('MMM-PhillipsHueController', {
             this.turnOnLightsLocally(payload);
         } else if (notification === 'LIGHTS_TURNED_OFF') {
             this.turnOffLightsLocally(payload);
-        } else if (notification == 'SEND_CAMERA_STATE') {
-            console.log("got camera state request")
-            body = {
-             "left": this.camera21,
-             "right": this.camera22
-            }
-            this.sendNotification('CAMERA_DATA', body);
         }
     },
 
     notificationReceived: function(notification, payload, sender) {
         if (sender?.name == 'MMM-Photobooth') {
-            console.log('received notif from photobooth', notification)
-            console.log('hues camera state', this.cameraDeployed)
             if (notification == 'LIGHTS_ON' && !this.cameraDeployed) {         
                 this.cameraDeployed = true; 
                 body = {
                     "left": this.camera21,
                     "right": this.camera22
                 };
-                console.log('saving light state!')
+                console.log('Sending a notification to photobooth to save light state.')
                 this.sendNotification('SAVE_LIGHT_STATE', body); // Send to photobooth app
     
                 this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
@@ -423,6 +413,7 @@ Module.register('MMM-PhillipsHueController', {
                 this.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
                 this.cameraDeployed = false; 
             } else if (notification == 'CHANGE_TEMP' && this.cameraDeployed) {
+                console.log("just changing tempurate")
                 this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
             }
         }
