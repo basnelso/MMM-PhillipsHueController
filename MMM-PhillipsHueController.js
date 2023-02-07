@@ -54,7 +54,6 @@ Module.register('MMM-PhillipsHueController', {
         this.groups = {};
         this.camera21 = {};
         this.camera22 = {};
-        this.lastKnownCameraColor = {};
 
         this.groupNumLookup = {};
 
@@ -462,9 +461,11 @@ Module.register('MMM-PhillipsHueController', {
         var lights = data.lights;
         var groups = data.groups;
 
-        // Before anything, grab the camera light states for picture taking
-        this.camera21 = data["lights"]["21"]["state"];
-        this.camera22 = data["lights"]["21"]["state"];
+        // Before anything, grab the camera light states for picture taking if camera is not deployed
+        if (!this.cameraDeployed) {
+            this.camera21 = data["lights"]["21"]["state"];
+            this.camera22 = data["lights"]["21"]["state"];
+        }
 
         // for the groups, let's immediately filter out anything that doesn't have a type of 'Room'
 
@@ -472,13 +473,6 @@ Module.register('MMM-PhillipsHueController', {
             var itemType = data.groups[key].type.toLowerCase();
             if (!(itemType === 'room' || itemType === 'zone')) {
                 delete data.groups[key];
-            }
-
-            // Don't update camera lights if they are currently 'deployed'
-            if (self.cameraDeployed && itemType === 'room' && data.groups[key].name === 'Camera Lights') { // Don't update camera lights cause of a bug
-                data.groups[key] = self.lastKnownCameraColor;
-            } else if (itemType === 'room' && data.groups[key].name === 'Camera Lights') {
-                self.lastKnownCameraColor = data.groups[key];
             }
         });
 
