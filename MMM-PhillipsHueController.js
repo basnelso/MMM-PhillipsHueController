@@ -399,15 +399,16 @@ Module.register('MMM-PhillipsHueController', {
 
     notificationReceived: function(notification, payload, sender) {
         if (sender?.name == 'MMM-Photobooth') {
-            if (notification == 'LIGHTS_ON' && !this.cameraDeployed) {         
+            if (notification == 'LIGHTS_ON' && !this.cameraDeployed) {
                 this.cameraDeployed = true; 
                 body = {
                     "left": this.camera21,
                     "right": this.camera22
                 };
+                console.log("recieved lights on notification, camera is deployed?", this.cameraDeployed)
                 console.log('Sending a notification to photobooth to save light state.')
                 this.sendNotification('SAVE_LIGHT_STATE', body); // Send to photobooth app
-    
+
                 this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
             } else if (notification == 'REVERSE_LIGHTS_BACK' && this.cameraDeployed) { // This should have the color the lights were in the payload
                 this.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
@@ -473,6 +474,7 @@ Module.register('MMM-PhillipsHueController', {
             }
 
             // Don't update camera lights if they are currently 'deployed'
+            console.log("processing data, is camera deployed?", this.cameraDeployed)
             if (this.cameraDeployed && itemType === 'room' && data.groups[key].name === 'Camera Lights') { // Don't update camera lights cause of a bug
                 console.log("camera is deployed so removing camera lights")
                 delete data.groups[key];
