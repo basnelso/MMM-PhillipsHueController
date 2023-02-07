@@ -420,6 +420,8 @@ Module.register('MMM-PhillipsHueController', {
             } else if (notification == 'REVERSE_LIGHTS_BACK' && this.cameraDeployed) { // This should have the color the lights were in the payload
                 this.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
                 this.cameraDeployed = false; 
+            } else if (notification == 'CHANGE_TEMP' && this.cameraDeployed) {
+                this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
             }
         }
     },

@@ -45,7 +45,7 @@ module.exports = NodeHelper.create({
         if (type == 'cool') {
             ct = 153;
         } else if (type == 'medium') {
-            ct = 200;
+            ct = 300;
         } else if (type == 'warm') {
             ct = 400;
         }
@@ -76,7 +76,7 @@ module.exports = NodeHelper.create({
                 "content-type": "application/json",
             },
             body: {
-                'ct': 153
+                'ct': ct
             },
             json: true,
             },
