@@ -406,7 +406,6 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     notificationReceived: function(notification, payload, sender) {
-        console.log("recieved notif", sender)
         if (sender?.name == 'MMM-Photobooth') {
             if (notification == 'LIGHTS_ON' && !this.cameraDeployed) {         
                 this.cameraDeployed = true; 
