@@ -415,6 +415,7 @@ Module.register('MMM-PhillipsHueController', {
                     "left": this.camera21,
                     "right": this.camera22
                 };
+                console.log('saving light state!')
                 this.sendNotification('SAVE_LIGHT_STATE', body); // Send to photobooth app
     
                 this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
