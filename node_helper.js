@@ -40,8 +40,15 @@ module.exports = NodeHelper.create({
         });
     },
 
-    setLightWhite: function(id) {
-        console.log("setting lights to white")
+    setLightWhite: function(type) {
+        var ct = 153;
+        if (type == 'cool') {
+            ct = 153;
+        } else if (type == 'medium') {
+            ct = 200;
+        } else if (type == 'warm') {
+            ct = 400;
+        }
         var idLeft = 21;
         var idRight = 22;
         var url1 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idLeft}/state`;
@@ -54,7 +61,7 @@ module.exports = NodeHelper.create({
                 "content-type": "application/json",
             },
             body: {
-                'ct': 153
+                'ct': ct
             },
             json: true,
             },
@@ -155,7 +162,7 @@ module.exports = NodeHelper.create({
         } else if (notification === "TURN_ON_LIGHTS") {
             this.turnOnAllLights(payload);
         } else if (notification === "SWITCH_CAMERA_WHITE") {
-            this.setLightWhite()
+            this.setLightWhite(payload)
         } else if (notification === "SWITCH_CAMERA_COLOR") {
             this.setLightColor(payload);
         }
