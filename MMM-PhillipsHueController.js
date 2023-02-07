@@ -54,6 +54,7 @@ Module.register('MMM-PhillipsHueController', {
         this.groups = {};
         this.camera21 = {};
         this.camera22 = {};
+        this.lastKnownCameraColor = {};
 
         this.groupNumLookup = {};
 
@@ -474,12 +475,10 @@ Module.register('MMM-PhillipsHueController', {
             }
 
             // Don't update camera lights if they are currently 'deployed'
-            console.log("processing data, is camera deployed?", self.cameraDeployed)
             if (self.cameraDeployed && itemType === 'room' && data.groups[key].name === 'Camera Lights') { // Don't update camera lights cause of a bug
-                console.log("camera is deployed so removing camera lights")
-                delete data.groups[key];
+                data.groups[key] = self.lastKnownCameraColor;
             } else if (itemType === 'room' && data.groups[key].name === 'Camera Lights') {
-                console.log("camera is not deployed so updating camera lights")
+                self.lastKnownCameraColor = data.groups[key];
             }
         });
 
