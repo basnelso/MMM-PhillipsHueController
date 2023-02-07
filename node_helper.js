@@ -134,6 +134,7 @@ module.exports = NodeHelper.create({
     },
 
     socketNotificationReceived: function(notification, payload) {
+        console.log('notif recieved', notification)
         if (notification === 'MMM_HUE_LIGHTS_GET') {
 
             var bridgeIp = payload.bridgeIp;
@@ -164,6 +165,7 @@ module.exports = NodeHelper.create({
         } else if (notification === "SWITCH_CAMERA_WHITE") {
             this.setLightWhite(payload)
         } else if (notification === "SWITCH_CAMERA_COLOR") {
+            console.log("switching camera color back", payload)
             this.setLightColor(payload);
         }
     },
