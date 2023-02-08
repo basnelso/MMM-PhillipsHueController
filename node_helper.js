@@ -46,9 +46,9 @@ module.exports = NodeHelper.create({
         if (type == 'cool') {
             ct = 153;
         } else if (type == 'medium') {
-            ct = 300;
+            ct = 260;
         } else if (type == 'warm') {
-            ct = 400;
+            ct = 360;
         }
         var idLeft = 21;
         var idRight = 22;
