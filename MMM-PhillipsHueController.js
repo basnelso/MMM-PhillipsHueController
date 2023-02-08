@@ -464,7 +464,7 @@ Module.register('MMM-PhillipsHueController', {
         // Before anything, grab the camera light states for picture taking if camera is not deployed
         if (!this.cameraDeployed) {
             this.camera21 = data["lights"]["21"]["state"];
-            this.camera22 = data["lights"]["21"]["state"];
+            this.camera22 = data["lights"]["22"]["state"];
         }
 
         // for the groups, let's immediately filter out anything that doesn't have a type of 'Room'
