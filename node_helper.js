@@ -90,8 +90,10 @@ module.exports = NodeHelper.create({
         console.log("setting lights back to stored state, with payload:", payload)
         var idLeft = 21;
         var idRight = 22;
+        var idBulb = 47;
         var url1 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idLeft}/state`;
         var url2 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idRight}/state`;
+        var url3 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idBulb}/state`;
 
         request({
             url : url1,
@@ -132,6 +134,26 @@ module.exports = NodeHelper.create({
             function(err, res, body) {
                 console.log(body);
             })
+
+        request({
+                url : url3,
+                method :"PUT",
+                headers : {
+                    "content-type": "application/json",
+                },
+                body: {
+                    "bri": payload.right.bri,
+                    "hue": payload.right.hue,
+                    "sat": payload.right.sat,
+                    "xy": payload.right.xy,
+                    "ct": payload.right.ct,
+                    "colormode": payload.right.colorMode,
+                },
+                json: true,
+                },
+                function(err, res, body) {
+                    console.log(body);
+                })
     },
 
     socketNotificationReceived: function(notification, payload) {
