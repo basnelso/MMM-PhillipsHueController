@@ -48,13 +48,17 @@ Module.register('MMM-PhillipsHueController', {
 
         this.sleepTimer = null;
         this.sleeping = false;
+        this.cameraDeployed = false;
 
         this.lights = {};
         this.groups = {};
+        this.camera21 = {};
+        this.camera22 = {};
 
         this.groupNumLookup = {};
 
         this.hbDataArr = [];
+
     },
 
     getDom: function() {
@@ -110,7 +114,6 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     turnOffLights: function(groupNum) {
-        console.log('turning off lights for group:', groupNum)
         const hueUrl = `http://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
         payload = {
             "url": hueUrl,
@@ -152,7 +155,7 @@ Module.register('MMM-PhillipsHueController', {
         this.hbDataArr = [];
         var self = this;
         for (const [groupNumber, item] of dataArr) {
-            console.log('initial item is', item);
+            //console.log('initial item is', item);
             var hbData = {
                 rows: []
             };
@@ -343,7 +346,7 @@ Module.register('MMM-PhillipsHueController', {
                 itemBrightnessStyle
             };
 
-            console.log('creating an item for', item)
+            //console.log('creating an item for', item)
             self.groupNumLookup[item.name] = parseInt(groupNumber);
 
             hbData.rows.push(rowObj);
@@ -394,6 +397,29 @@ Module.register('MMM-PhillipsHueController', {
         }
     },
 
+    notificationReceived: function(notification, payload, sender) {
+        if (sender?.name == 'MMM-Photobooth') {
+            if (notification == 'LIGHTS_ON' && !this.cameraDeployed) {
+                this.cameraDeployed = true; 
+                body = {
+                    "left": this.camera21,
+                    "right": this.camera22
+                };
+                console.log("recieved lights on notification, camera is deployed?", this.cameraDeployed)
+                console.log('Sending a notification to photobooth to save light state.')
+                this.sendNotification('SAVE_LIGHT_STATE', body); // Send to photobooth app
+
+                this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
+            } else if (notification == 'REVERSE_LIGHTS_BACK' && this.cameraDeployed) { // This should have the color the lights were in the payload
+                this.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
+                this.cameraDeployed = false; 
+            } else if (notification == 'CHANGE_TEMP' && this.cameraDeployed) {
+                console.log("just changing tempurate")
+                this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
+            }
+        }
+    },
+
     suspend: function() {
         // this method is triggered when a module is hidden using this.hide()
 
@@ -417,7 +443,7 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     processHueData: function(data) {
-        console.log(data)
+        //console.log(data)
         var self = this;
 
         var displayMode = this.config.displayMode;
@@ -434,6 +460,12 @@ Module.register('MMM-PhillipsHueController', {
 
         var lights = data.lights;
         var groups = data.groups;
+
+        // Before anything, grab the camera light states for picture taking if camera is not deployed
+        if (!this.cameraDeployed) {
+            this.camera21 = data["lights"]["21"]["state"];
+            this.camera22 = data["lights"]["22"]["state"];
+        }
 
         // for the groups, let's immediately filter out anything that doesn't have a type of 'Room'
 
