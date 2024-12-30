@@ -1,6 +1,9 @@
 var NodeHelper = require('node_helper');
 var request = require('request');
-const fetch = require('node-fetch');
+let fetch; // Placeholder for node-fetch
+(async () => {
+    fetch = (await import('node-fetch')).default; // Dynamically import node-fetch
+})();
 
 module.exports = NodeHelper.create({
 
