@@ -59,6 +59,7 @@ module.exports = NodeHelper.create({
         var url1 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idLeft}/state`;
         var url2 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idRight}/state`;
         var url3 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idBulb}/state`;
+        var bri = 254;
 
         request({
             url : url1,
@@ -67,7 +68,8 @@ module.exports = NodeHelper.create({
                 "content-type": "application/json",
             },
             body: {
-                'ct': ct
+                'ct': ct,
+                'bri': bri
             },
             json: true,
             },
@@ -82,7 +84,8 @@ module.exports = NodeHelper.create({
                 "content-type": "application/json",
             },
             body: {
-                'ct': ct
+                'ct': ct,
+                'bri': bri
             },
             json: true,
             },
@@ -96,7 +99,8 @@ module.exports = NodeHelper.create({
                 "content-type": "application/json",
             },
             body: {
-                'ct': ct
+                'ct': ct,
+                'bri': bri
             },
             json: true,
             },
