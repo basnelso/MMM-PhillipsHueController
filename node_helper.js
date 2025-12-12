@@ -56,9 +56,9 @@ module.exports = NodeHelper.create({
         var idLeft = 21;
         var idRight = 22;
         var idBulb = 47;
-        var url1 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idLeft}/state`;
-        var url2 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idRight}/state`;
-        var url3 = `http://192.168.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idBulb}/state`;
+        var url1 = `http://10.0.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idLeft}/state`;
+        var url2 = `http://10.0.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idRight}/state`;
+        var url3 = `http://10.0.0.119/api/cI9FSbnf7ejbHQ1d3wDUtSf43EYQIvs9r1FDvYCo/lights/${idBulb}/state`;
         var bri = 254;
 
         request({
