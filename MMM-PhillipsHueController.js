@@ -114,7 +114,7 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     turnOffLights: function(groupNum) {
-        const hueUrl = `http://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
+        const hueUrl = `https://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
         payload = {
             "url": hueUrl,
             "num": groupNum
@@ -129,7 +129,7 @@ Module.register('MMM-PhillipsHueController', {
     },
 
     turnOnLights: function(groupNum) {
-        const hueUrl = `http://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
+        const hueUrl = `https://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
         payload = {
             "url": hueUrl,
             "num": groupNum
