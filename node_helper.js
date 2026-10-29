@@ -17,6 +17,8 @@ const STREAM_RETRY_MIN = 5000;
 const STREAM_RETRY_MAX = 60000;
 // Several events usually arrive together (one per light in a room), so refresh once they settle.
 const STREAM_REFRESH_DELAY = 300;
+// Scenes change rarely; scene events from the stream refresh them sooner.
+const SCENE_REFRESH_INTERVAL = 5 * 60 * 1000;
 
 const COLOR_TEMPERATURES = {
     cool: 153,
@@ -41,6 +43,8 @@ module.exports = NodeHelper.create({
         this.streamRetryDelay = STREAM_RETRY_MIN;
         this.streamRetryTimer = null;
         this.streamRefreshTimer = null;
+        this.sceneRefreshTimer = null;
+        this.lastSceneRefresh = 0;
     },
 
     setHueConfig: function(payload) {
@@ -161,14 +165,22 @@ module.exports = NodeHelper.create({
         });
     },
 
+    /*
+     * `apiPath` is relative to the v1 API (`lights`), or an absolute v2 path (`/clip/v2/resource/scene`).
+     */
     hueRequestAt: function(bridgeIp, method, apiPath, body) {
-        var url = `https://${bridgeIp}/api/${this.user}/${apiPath}`;
+        var isV2 = apiPath.startsWith('/');
+        var url = isV2 ? `https://${bridgeIp}${apiPath}` : `https://${bridgeIp}/api/${this.user}/${apiPath}`;
+        var headers = { 'Content-Type': 'application/json' };
+        if (isV2) {
+            headers['hue-application-key'] = this.user;
+        }
         return new Promise(function(resolve, reject) {
             var request = https.request(url, {
                 method: method,
                 agent: hueAgent,
                 timeout: 10000,
-                headers: { 'Content-Type': 'application/json' }
+                headers: headers
             }, function(response) {
                 var chunks = [];
                 response.on('data', function(chunk) { chunks.push(chunk); });
@@ -185,9 +197,11 @@ module.exports = NodeHelper.create({
                         reject(new Error('Invalid JSON response'));
                         return;
                     }
-                    var errors = Array.isArray(parsed) ? parsed.filter(function(entry) { return entry.error; }) : [];
+                    var errors = Array.isArray(parsed)
+                        ? parsed.filter(function(entry) { return entry.error; }).map(function(entry) { return entry.error; })
+                        : (parsed.errors || []);
                     if (errors.length > 0) {
-                        reject(new Error(errors.map(function(entry) { return entry.error.description; }).join('; ')));
+                        reject(new Error(errors.map(function(entry) { return entry.description; }).join('; ')));
                         return;
                     }
                     resolve(parsed);
@@ -248,8 +262,11 @@ module.exports = NodeHelper.create({
                 buffered += chunk;
                 var messages = buffered.split('\n\n');
                 buffered = messages.pop();
-                if (messages.some(function(message) { return self.isLightEvent(message); })) {
+                if (messages.some(function(message) { return self.isEventOfType(message, ['light', 'grouped_light']); })) {
                     self.scheduleStreamRefresh();
+                }
+                if (messages.some(function(message) { return self.isEventOfType(message, ['scene']); })) {
+                    self.scheduleSceneRefresh();
                 }
             });
             response.on('end', function() {
@@ -288,7 +305,7 @@ module.exports = NodeHelper.create({
         this.startEventStream();
     },
 
-    isLightEvent: function(message) {
+    isEventOfType: function(message, types) {
         var dataLines = message.split('\n').filter(function(line) { return line.startsWith('data:'); });
         if (dataLines.length === 0) {
             return false;
@@ -297,7 +314,7 @@ module.exports = NodeHelper.create({
             var events = JSON.parse(dataLines.map(function(line) { return line.slice(5); }).join('\n'));
             return events.some(function(event) {
                 return (event.data || []).some(function(resource) {
-                    return resource.type === 'light' || resource.type === 'grouped_light';
+                    return types.includes(resource.type);
                 });
             });
         } catch (error) {
@@ -310,6 +327,96 @@ module.exports = NodeHelper.create({
         clearTimeout(this.streamRefreshTimer);
         this.streamRefreshTimer = setTimeout(function() {
             self.getHueData();
+        }, STREAM_REFRESH_DELAY);
+    },
+
+    /*
+     * Send the scenes saved for each room and zone, keyed by v1 group number. The v2 API is used because it
+     * leaves out the bridge's internal scenes and includes each scene's palette and whether it is active.
+     */
+    getScenes: function() {
+        var self = this;
+        this.lastSceneRefresh = Date.now();
+        Promise.all([
+            this.hueRequest('GET', '/clip/v2/resource/scene'),
+            this.hueRequest('GET', '/clip/v2/resource/room'),
+            this.hueRequest('GET', '/clip/v2/resource/zone')
+        ]).then(function([scenes, rooms, zones]) {
+            var groupNumById = {};
+            rooms.data.concat(zones.data).forEach(function(group) {
+                var match = /^\/groups\/(\d+)$/.exec(group.id_v1 || '');
+                if (match) {
+                    groupNumById[group.id] = match[1];
+                }
+            });
+
+            var scenesByGroup = {};
+            scenes.data.forEach(function(scene) {
+                var groupNum = groupNumById[scene.group.rid];
+                if (!groupNum) {
+                    return;
+                }
+                (scenesByGroup[groupNum] = scenesByGroup[groupNum] || []).push({
+                    id: scene.id,
+                    name: scene.metadata.name,
+                    active: Boolean(scene.status && scene.status.active && scene.status.active !== 'inactive'),
+                    colors: self.sceneColors(scene)
+                });
+            });
+            Object.values(scenesByGroup).forEach(function(list) {
+                list.sort(function(a, b) { return a.name.localeCompare(b.name); });
+            });
+            self.sendSocketNotification('HUE_SCENES', scenesByGroup);
+        }).catch(function(error) {
+            console.error('Hue API error reading scenes:', error.message);
+        });
+    },
+
+    /*
+     * Colours to draw for a scene: its palette if it has one, otherwise the colours its lights are set to.
+     * Each is {xy: [x, y]} or {mirek: n}.
+     */
+    sceneColors: function(scene) {
+        var toColor = function(entry) {
+            if (entry.color && entry.color.xy) {
+                return { xy: [entry.color.xy.x, entry.color.xy.y] };
+            }
+            if (entry.color_temperature && entry.color_temperature.mirek) {
+                return { mirek: entry.color_temperature.mirek };
+            }
+            return null;
+        };
+        var palette = scene.palette || {};
+        var colors = (palette.color || []).concat(palette.color_temperature || []).map(toColor);
+        if (colors.filter(Boolean).length === 0) {
+            colors = (scene.actions || []).map(function(entry) { return toColor(entry.action || {}); });
+        }
+        var seen = {};
+        return colors.filter(function(color) {
+            var key = JSON.stringify(color);
+            if (!color || seen[key]) {
+                return false;
+            }
+            seen[key] = true;
+            return true;
+        }).slice(0, 5);
+    },
+
+    recallScene: function(sceneId) {
+        var self = this;
+        this.hueRequest('PUT', '/clip/v2/resource/scene/' + sceneId, { recall: { action: 'active' } })
+            .catch(function(error) {
+                console.error('Hue API error recalling scene ' + sceneId + ':', error.message);
+                self.sendSocketNotification('SCENE_FAILED', { id: sceneId, error: error.message });
+                self.getScenes();
+            });
+    },
+
+    scheduleSceneRefresh: function() {
+        var self = this;
+        clearTimeout(this.sceneRefreshTimer);
+        this.sceneRefreshTimer = setTimeout(function() {
+            self.getScenes();
         }, STREAM_REFRESH_DELAY);
     },
 
@@ -396,10 +503,17 @@ module.exports = NodeHelper.create({
             this.setHueConfig(payload);
             this.getHueData();
             this.startEventStream();
+            if (Date.now() - this.lastSceneRefresh > SCENE_REFRESH_INTERVAL) {
+                this.getScenes();
+            }
         } else if (notification === 'TURN_OFF_LIGHTS') {
             this.setGroupPower(payload, false);
         } else if (notification === 'TURN_ON_LIGHTS') {
             this.setGroupPower(payload, true);
+        } else if (notification === 'GET_SCENES') {
+            this.getScenes();
+        } else if (notification === 'RECALL_SCENE') {
+            this.recallScene(payload);
         } else if (notification === 'SET_GROUP_BRIGHTNESS') {
             this.setGroupBrightness(payload.num, payload.bri);
         } else if (notification === 'SWITCH_CAMERA_WHITE') {

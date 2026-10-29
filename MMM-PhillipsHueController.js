@@ -9,6 +9,9 @@
  * MIT Licensed.
  */
 
+// Matches the scene-menu-close animation in MMM-PhillipsHueController.css.
+const SCENE_MENU_CLOSE_MS = 180;
+
 Module.register('MMM-PhillipsHueController', {
 
     defaults: {
@@ -26,6 +29,10 @@ Module.register('MMM-PhillipsHueController', {
         toggleConfirmTimeout: 5000,
         // Minimum time (ms) between brightness commands while dragging a room's brightness bar.
         brightnessThrottle: 250,
+        // How long (ms) to hold a room's tile to open its scene menu.
+        longPressDuration: 500,
+        // The scene menu closes after this long (ms) without a tap.
+        sceneMenuTimeout: 10000,
         version: '1.4.0'
     },
 
@@ -74,6 +81,16 @@ Module.register('MMM-PhillipsHueController', {
         this.brightnessSendTimer = null;
         this.lastBrightnessSent = 0;
 
+        // Saved scenes by group number: [{id, name, active, colors}].
+        this.scenes = {};
+        // Rooms without saved scenes are absent from this.scenes, so loading is tracked separately.
+        this.scenesLoaded = false;
+        // The open scene menu: {groupNum, awaitingRelease}, or null.
+        this.sceneMenu = null;
+        this.sceneMenuTimer = null;
+        this.sceneMenuOutsideHandler = null;
+        this.lastPanelSize = null;
+
         this.hbDataArr = [];
 
     },
@@ -89,8 +106,11 @@ Module.register('MMM-PhillipsHueController', {
             outer_wrapper.innerHTML = 'Loading ...';
             outer_wrapper.className = 'bright light small';
             return outer_wrapper;
+        } else if (this.sceneMenu) {
+            return this.buildSceneMenu();
         } else {
-            outer_wrapper.className = 'outer-wrapper';
+            outer_wrapper.className = 'outer-wrapper' + (this.roomsReturning ? ' returning' : '');
+            this.roomsReturning = false;
         }
 
         this.renderGrid();
@@ -115,9 +135,17 @@ Module.register('MMM-PhillipsHueController', {
                 self.roomClicked(hbData.rows[0].name);
             });
             self.attachBrightnessDrag(room_wrapper, hbData.rows[0].name);
+            self.attachLongPress(room_wrapper, hbData.rows[0].name);
 
             outer_wrapper.appendChild(room_wrapper);
         })
+
+        // Remembered so the scene menu can take exactly the panel's place.
+        requestAnimationFrame(function() {
+            if (outer_wrapper.isConnected && outer_wrapper.offsetWidth > 0) {
+                self.lastPanelSize = { width: outer_wrapper.offsetWidth, height: outer_wrapper.offsetHeight };
+            }
+        });
 
         return outer_wrapper;
     },
@@ -138,7 +166,7 @@ Module.register('MMM-PhillipsHueController', {
 
     /*
      * Make a room's brightness bar draggable. Electron treats a finger drag as a scroll unless the touch events
-     * are handled directly, and the bar is thin, so touches just above or below it count too.
+     * are handled directly.
      */
     attachBrightnessDrag: function(wrapper, roomName) {
         var self = this;
@@ -147,12 +175,11 @@ Module.register('MMM-PhillipsHueController', {
         if (!fill) {
             return;
         }
-        var HIT_MARGIN = 15;
         var dragging = false;
 
         var onBar = function(clientY) {
             var rect = bar.getBoundingClientRect();
-            return clientY >= rect.top - HIT_MARGIN && clientY <= rect.bottom + HIT_MARGIN;
+            return clientY >= rect.top && clientY <= rect.bottom;
         };
         var update = function(clientX, isFinal) {
             var rect = bar.getBoundingClientRect();
@@ -226,6 +253,345 @@ Module.register('MMM-PhillipsHueController', {
             window.addEventListener('mousemove', move);
             window.addEventListener('mouseup', up);
         });
+    },
+
+    /*
+     * Holding a tile (anywhere but its brightness bar) opens that room's scene menu.
+     */
+    attachLongPress: function(wrapper, roomName) {
+        var self = this;
+        var MOVE_TOLERANCE = 10;
+        var timer = null;
+        var start = null;
+        var fired = false;
+
+        var cancel = function() {
+            clearTimeout(timer);
+            timer = null;
+        };
+        var begin = function(clientX, clientY) {
+            fired = false;
+            if (self.brightnessDragging) {
+                return;
+            }
+            start = { x: clientX, y: clientY };
+            cancel();
+            timer = setTimeout(function() {
+                timer = null;
+                fired = true;
+                self.openSceneMenu(self.groupNumLookup[roomName]);
+            }, Number(self.config.longPressDuration));
+        };
+        var move = function(clientX, clientY) {
+            if (timer && (Math.abs(clientX - start.x) > MOVE_TOLERANCE || Math.abs(clientY - start.y) > MOVE_TOLERANCE)) {
+                cancel();
+            }
+        };
+
+        wrapper.addEventListener('touchstart', function(event) {
+            begin(event.touches[0].clientX, event.touches[0].clientY);
+        });
+        wrapper.addEventListener('touchmove', function(event) {
+            move(event.touches[0].clientX, event.touches[0].clientY);
+        });
+        wrapper.addEventListener('touchend', function(event) {
+            cancel();
+            if (fired) {
+                // The hold opened the menu; don't let the release also toggle the room.
+                event.preventDefault();
+                self.sceneMenuOpenerReleased();
+            }
+        }, { passive: false });
+        wrapper.addEventListener('touchcancel', cancel);
+
+        wrapper.addEventListener('mousedown', function(event) {
+            begin(event.clientX, event.clientY);
+        });
+        wrapper.addEventListener('mousemove', function(event) {
+            move(event.clientX, event.clientY);
+        });
+        wrapper.addEventListener('mouseup', function() {
+            cancel();
+            if (fired) {
+                self.suppressNextClick = true;
+                setTimeout(function() { self.suppressNextClick = false; }, 0);
+                self.sceneMenuOpenerReleased();
+            }
+        });
+        wrapper.addEventListener('mouseleave', cancel);
+    },
+
+    openSceneMenu: function(groupNum) {
+        var self = this;
+        if (this.groups[groupNum] === undefined) {
+            return;
+        }
+        // The finger or button that opened the menu is still down; its release must not count as a tap.
+        this.sceneMenu = { groupNum: groupNum, awaitingRelease: true };
+        this.sendSocketNotification('GET_SCENES');
+
+        // A tap anywhere outside the menu only closes it, so it can't also press another module's button.
+        this.sceneMenuOutsideHandler = function(event) {
+            if (event.type === 'touchend' || event.type === 'mouseup') {
+                if (self.sceneMenu.awaitingRelease) {
+                    self.sceneMenuOpenerReleased();
+                }
+                return;
+            }
+            if (self.sceneMenu.awaitingRelease) {
+                if (event.type === 'click') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+                return;
+            }
+            var menu = document.querySelector('.MMM-PhillipsHueController .scene-menu');
+            if (self.sceneMenu.closing) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
+            if (menu && menu.contains(event.target)) {
+                self.restartSceneMenuTimer();
+                return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            // With a mouse the click still follows the press that closed the menu; swallow that too.
+            var swallowClick = function(clickEvent) {
+                clickEvent.preventDefault();
+                clickEvent.stopPropagation();
+            };
+            document.addEventListener('click', swallowClick, { capture: true, once: true });
+            setTimeout(function() {
+                document.removeEventListener('click', swallowClick, { capture: true });
+            }, 500);
+            self.closeSceneMenu();
+        };
+        ['touchstart', 'touchend', 'mousedown', 'mouseup', 'click'].forEach(function(type) {
+            document.addEventListener(type, self.sceneMenuOutsideHandler, { capture: true, passive: false });
+        });
+
+        this.restartSceneMenuTimer();
+        this.updateDom(0);
+    },
+
+    /*
+     * The tile that was held has been replaced by the menu, so its release never reaches the document listeners;
+     * the tile's own handler reports it instead. Cleared after the click that follows has been ignored.
+     */
+    sceneMenuOpenerReleased: function() {
+        var self = this;
+        setTimeout(function() {
+            if (self.sceneMenu) {
+                self.sceneMenu.awaitingRelease = false;
+            }
+        }, 0);
+    },
+
+    closeSceneMenu: function() {
+        var self = this;
+        if (!this.sceneMenu || this.sceneMenu.closing) {
+            return;
+        }
+        this.sceneMenu.closing = true;
+        var menu = document.querySelector('.MMM-PhillipsHueController .scene-menu');
+        if (menu) {
+            menu.classList.add('closing');
+        }
+        // Let the closing animation (MMM-PhillipsHueController.css) play before the rooms come back.
+        setTimeout(function() {
+            self.finishClosingSceneMenu();
+        }, menu ? SCENE_MENU_CLOSE_MS : 0);
+    },
+
+    finishClosingSceneMenu: function() {
+        var self = this;
+        this.sceneMenu = null;
+        this.roomsReturning = true;
+        clearTimeout(this.sceneMenuTimer);
+        ['touchstart', 'touchend', 'mousedown', 'mouseup', 'click'].forEach(function(type) {
+            document.removeEventListener(type, self.sceneMenuOutsideHandler, { capture: true });
+        });
+        this.sceneMenuOutsideHandler = null;
+        this.renderAfterDrag = false;
+        this.updateDom(0);
+    },
+
+    restartSceneMenuTimer: function() {
+        var self = this;
+        clearTimeout(this.sceneMenuTimer);
+        this.sceneMenuTimer = setTimeout(function() {
+            self.closeSceneMenu();
+        }, Number(this.config.sceneMenuTimeout));
+    },
+
+    buildSceneMenu: function() {
+        var self = this;
+        var groupNum = this.sceneMenu.groupNum;
+        var group = this.groups[groupNum];
+
+        var menu = document.createElement('div');
+        menu.className = 'scene-menu';
+        if (this.lastPanelSize) {
+            menu.style.width = this.lastPanelSize.width + 'px';
+            menu.style.height = this.lastPanelSize.height + 'px';
+        }
+
+        var title = document.createElement('div');
+        title.className = 'scene-menu-title';
+        title.textContent = group ? group.name : '';
+        menu.appendChild(title);
+
+        var list = document.createElement('div');
+        list.className = 'scene-menu-list';
+        var scenes = this.scenesLoaded ? (this.scenes[groupNum] || []) : null;
+        if (!scenes) {
+            list.textContent = 'Loading scenes…';
+            list.classList.add('scene-menu-empty');
+        } else if (scenes.length === 0) {
+            list.textContent = 'No scenes saved for this room.';
+            list.classList.add('scene-menu-empty');
+        }
+        (scenes || []).forEach(function(scene) {
+            var button = document.createElement('div');
+            button.className = 'scene-button' + (scene.active ? ' active' : '');
+            button.dataset.sceneId = scene.id;
+
+            var swatch = document.createElement('div');
+            swatch.className = 'scene-swatch';
+            swatch.style.background = self.sceneSwatchStyle(scene.colors);
+            button.appendChild(swatch);
+
+            var name = document.createElement('div');
+            name.className = 'scene-name';
+            name.textContent = scene.name;
+            button.appendChild(name);
+
+            list.appendChild(button);
+        });
+        menu.appendChild(list);
+        var wasDragged = this.attachDragScroll(list);
+
+        // A tap on a scene recalls it and keeps the menu open; a tap anywhere else in the menu closes it.
+        menu.addEventListener('click', function(event) {
+            if (wasDragged()) {
+                return;
+            }
+            var button = event.target.closest('.scene-button');
+            if (!button) {
+                self.closeSceneMenu();
+                return;
+            }
+            self.recallScene(groupNum, button.dataset.sceneId);
+        });
+
+        return menu;
+    },
+
+    /*
+     * Scroll the scene list by dragging, since a touchscreen has no scroll wheel and Electron doesn't scroll it
+     * from touch. Returns a function telling whether the last press was a drag, so it isn't also taken as a tap.
+     */
+    attachDragScroll: function(list) {
+        var DRAG_THRESHOLD = 8;
+        var startY = null;
+        var startScroll = 0;
+        var dragged = false;
+
+        var begin = function(clientY) {
+            startY = clientY;
+            startScroll = list.scrollTop;
+            dragged = false;
+        };
+        var move = function(clientY, event) {
+            if (startY === null) {
+                return;
+            }
+            var distance = clientY - startY;
+            if (Math.abs(distance) > DRAG_THRESHOLD) {
+                dragged = true;
+            }
+            if (dragged) {
+                event.preventDefault();
+                list.scrollTop = startScroll - distance;
+            }
+        };
+        var end = function() {
+            startY = null;
+        };
+
+        list.addEventListener('touchstart', function(event) { begin(event.touches[0].clientY); });
+        list.addEventListener('touchmove', function(event) { move(event.touches[0].clientY, event); }, { passive: false });
+        list.addEventListener('touchend', function(event) {
+            if (dragged) {
+                event.preventDefault();
+            }
+            end();
+        }, { passive: false });
+        list.addEventListener('mousedown', function(event) {
+            begin(event.clientY);
+            var onMove = function(moveEvent) { move(moveEvent.clientY, moveEvent); };
+            var onUp = function() {
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+                end();
+            };
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+        });
+
+        return function() {
+            return dragged;
+        };
+    },
+
+    recallScene: function(groupNum, sceneId) {
+        (this.scenes[groupNum] || []).forEach(function(scene) {
+            scene.active = scene.id === sceneId;
+        });
+        this.markActiveScene();
+        this.sendSocketNotification('RECALL_SCENE', sceneId);
+    },
+
+    // Update the highlight in place; redrawing the menu would lose its scroll position.
+    markActiveScene: function() {
+        if (!this.sceneMenu) {
+            return;
+        }
+        var activeIds = (this.scenes[this.sceneMenu.groupNum] || [])
+            .filter(function(scene) { return scene.active; })
+            .map(function(scene) { return scene.id; });
+        document.querySelectorAll('.MMM-PhillipsHueController .scene-button').forEach(function(button) {
+            button.classList.toggle('active', activeIds.includes(button.dataset.sceneId));
+        });
+    },
+
+    sceneSwatchStyle: function(colors) {
+        var self = this;
+        var hexes = (colors || []).map(function(color) {
+            var rgb = color.xy ? self.XYtoRGB(color.xy[0], color.xy[1], 254) : self.mirekToRGB(color.mirek);
+            return self.rgbToHex(rgb);
+        });
+        if (hexes.length === 0) {
+            return '#888';
+        }
+        if (hexes.length === 1) {
+            return hexes[0];
+        }
+        return 'conic-gradient(' + hexes.concat(hexes[0]).join(', ') + ')';
+    },
+
+    // Approximate colour of white light at a colour temperature, from Tanner Helland's blackbody fit.
+    mirekToRGB: function(mirek) {
+        var temp = 1000000 / mirek / 100;
+        var clamp = function(value) { return Math.round(Math.min(255, Math.max(0, value))); };
+        var red = temp <= 66 ? 255 : 329.698727446 * Math.pow(temp - 60, -0.1332047592);
+        var green = temp <= 66
+            ? 99.4708025861 * Math.log(temp) - 161.1195681661
+            : 288.1221695283 * Math.pow(temp - 60, -0.0755148492);
+        var blue = temp >= 66 ? 255 : (temp <= 19 ? 0 : 138.5177312231 * Math.log(temp - 10) - 305.0447927307);
+        return { r: clamp(red), g: clamp(green), b: clamp(blue) };
     },
 
     setBrightness: function(groupNum, bri, isFinal) {
@@ -543,6 +909,19 @@ Module.register('MMM-PhillipsHueController', {
             this.updateDom();
         } else if (notification === 'LIGHTS_TURNED_ON' || notification === 'LIGHTS_TURNED_OFF') {
             this.getData();
+        } else if (notification === 'HUE_SCENES') {
+            var hadScenes = this.scenesLoaded && this.sceneMenu && (this.scenes[this.sceneMenu.groupNum] || []).length > 0;
+            this.scenes = payload;
+            this.scenesLoaded = true;
+            if (this.sceneMenu) {
+                if (hadScenes) {
+                    this.markActiveScene();
+                } else {
+                    this.updateDom(0);
+                }
+            }
+        } else if (notification === 'SCENE_FAILED') {
+            Log.error(this.name + ': could not recall scene ' + payload.id + ': ' + payload.error);
         } else if (notification === 'BRIGHTNESS_FAILED') {
             Log.error(this.name + ': could not set brightness of group ' + payload.num + ': ' + payload.error);
             delete this.pendingBrightness[payload.num];
@@ -854,8 +1233,9 @@ Module.register('MMM-PhillipsHueController', {
             }
 
             // Redrawing mid-drag would replace the bar under the finger, so wait until it is let go.
-            if (this.brightnessDragging) {
-                this.renderAfterDrag = true;
+            // The scene menu redraws when it closes instead, so it keeps its scroll position.
+            if (this.brightnessDragging || this.sceneMenu) {
+                this.renderAfterDrag = !this.sceneMenu;
             } else {
                 this.updateDom();
             }
