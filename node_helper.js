@@ -152,7 +152,9 @@ module.exports = NodeHelper.create({
 
         var ct = 153;
 
-        if (type == 'cool') {
+        if (typeof type == 'number') {
+            ct = Math.round(type);
+        } else if (type == 'cool') {
             ct = 153;
         } else if (type == 'medium') {
             ct = 260;
@@ -171,6 +173,7 @@ module.exports = NodeHelper.create({
         var bri = 254;
 
         var body = {
+            'on': true,
             'ct': ct,
             'bri': bri
         };
@@ -203,6 +206,7 @@ module.exports = NodeHelper.create({
         var url3 = this.hueUrl(`lights/${idBulb}/state`);
 
         var leftBody = {
+            "on": payload.left.on !== false,
             "bri": payload.left.bri,
             "hue": payload.left.hue,
             "sat": payload.left.sat,
@@ -212,6 +216,7 @@ module.exports = NodeHelper.create({
         };
 
         var rightBody = {
+            "on": payload.right.on !== false,
             "bri": payload.right.bri,
             "hue": payload.right.hue,
             "sat": payload.right.sat,
@@ -225,6 +230,7 @@ module.exports = NodeHelper.create({
          * so that behavior is intentionally preserved here.
          */
         var bulbBody = {
+            "on": payload.right.on !== false,
             "bri": payload.right.bri,
             "hue": payload.right.hue,
             "sat": payload.right.sat,
@@ -267,6 +273,16 @@ module.exports = NodeHelper.create({
                     description + ":",
                     res ? res.statusCode : 'unknown',
                     responseBody
+                );
+                return;
+            }
+
+            // The bridge answers HTTP 200 even when a command fails, listing failures as {error: ...} entries.
+            var errors = Array.isArray(responseBody) ? responseBody.filter(function(entry) { return entry.error; }) : [];
+            if (errors.length > 0) {
+                console.error(
+                    "Hue rejected update for " + description + ":",
+                    JSON.stringify(errors)
                 );
                 return;
             }

@@ -54,6 +54,8 @@ Module.register('MMM-PhillipsHueController', {
         this.groups = {};
         this.camera21 = {};
         this.camera22 = {};
+        this.previewState = null;
+        this.cameraStateFrozenUntil = 0;
 
         this.groupNumLookup = {};
 
@@ -115,7 +117,7 @@ Module.register('MMM-PhillipsHueController', {
 
     turnOffLights: function(groupNum) {
         const hueUrl = `https://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
-        payload = {
+        const payload = {
             "url": hueUrl,
             "num": groupNum
         }
@@ -130,7 +132,7 @@ Module.register('MMM-PhillipsHueController', {
 
     turnOnLights: function(groupNum) {
         const hueUrl = `https://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
-        payload = {
+        const payload = {
             "url": hueUrl,
             "num": groupNum
         }
@@ -401,10 +403,13 @@ Module.register('MMM-PhillipsHueController', {
         if (sender?.name == 'MMM-Photobooth') {
             if (notification == 'LIGHTS_ON' && !this.cameraDeployed) {
                 this.cameraDeployed = true; 
-                body = {
+                // If a slider preview is showing, the lights are already the preview white, so save the
+                // state from before the preview instead.
+                const body = this.previewState || {
                     "left": this.camera21,
                     "right": this.camera22
                 };
+                this.previewState = null;
                 console.log("recieved lights on notification, camera is deployed?", this.cameraDeployed)
                 console.log('Sending a notification to photobooth to save light state.')
                 this.sendNotification('SAVE_LIGHT_STATE', body); // Send to photobooth app
@@ -412,12 +417,38 @@ Module.register('MMM-PhillipsHueController', {
                 this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
             } else if (notification == 'REVERSE_LIGHTS_BACK' && this.cameraDeployed) { // This should have the color the lights were in the payload
                 this.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
+                this.rememberRestoredCameraState(payload);
                 this.cameraDeployed = false; 
+            } else if (notification == 'PREVIEW_TEMP' && !this.cameraDeployed) {
+                // Until the first bridge poll arrives there is no state to restore afterwards, so skip the preview.
+                if (!this.camera21.hasOwnProperty('on')) {
+                    console.log('No camera light state yet, skipping preview');
+                    return;
+                }
+                if (!this.previewState) {
+                    this.previewState = {
+                        "left": this.camera21,
+                        "right": this.camera22
+                    };
+                }
+                this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
+            } else if (notification == 'END_PREVIEW' && this.previewState && !this.cameraDeployed) {
+                this.sendSocketNotification('SWITCH_CAMERA_COLOR', this.previewState);
+                this.rememberRestoredCameraState(this.previewState);
+                this.previewState = null;
             } else if (notification == 'CHANGE_TEMP' && this.cameraDeployed) {
                 console.log("just changing tempurate")
                 this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
             }
         }
+    },
+
+    // After a restore the bridge takes a moment to settle and a poll may already be in flight with the old
+    // colour, so trust the state that was just restored until the next couple of polls.
+    rememberRestoredCameraState: function(restoredState) {
+        this.camera21 = restoredState.left;
+        this.camera22 = restoredState.right;
+        this.cameraStateFrozenUntil = Date.now() + 2 * Number(this.config.updateInterval);
     },
 
     suspend: function() {
@@ -461,8 +492,10 @@ Module.register('MMM-PhillipsHueController', {
         var lights = data.lights;
         var groups = data.groups;
 
-        // Before anything, grab the camera light states for picture taking if camera is not deployed
-        if (!this.cameraDeployed) {
+        // Before anything, grab the camera light states for picture taking if camera is not deployed.
+        // Skip this while a slider preview is showing, and briefly after the lights are restored: a poll taken
+        // then reports the preview white, which would later be "restored" instead of the real colour.
+        if (!this.cameraDeployed && !this.previewState && Date.now() > this.cameraStateFrozenUntil) {
             this.camera21 = data["lights"]["21"]["state"];
             this.camera22 = data["lights"]["22"]["state"];
         }
@@ -493,7 +526,7 @@ Module.register('MMM-PhillipsHueController', {
                         var itemName = itemsToFilter[key].name.toLowerCase();
                         var deleteItem = true;
 
-                        for (i = 0; i < displayFilter.length; i++) {
+                        for (let i = 0; i < displayFilter.length; i++) {
                             var filterString = displayFilter[i].toLowerCase().trim();
                             if (itemName.indexOf(filterString) > -1) {
                                 // this should NOT be filtered out
@@ -543,7 +576,7 @@ Module.register('MMM-PhillipsHueController', {
                     var itemName = itemsToFilter[key].name.toLowerCase();
                     var deleteItem = false;
 
-                    for (i = 0; i < hideFilter.length; i++) {
+                    for (let i = 0; i < hideFilter.length; i++) {
                         var filterString = hideFilter[i].toLowerCase().trim();
                         if (itemName.indexOf(filterString) > -1) {
                             // this should be filtered out
