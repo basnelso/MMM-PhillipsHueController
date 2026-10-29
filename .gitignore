@@ -38,3 +38,7 @@ Temporary Items
 .fuse_hidden*
 .directory
 .Trash-*
+
+# Last bridge address found by discovery.
+bridge-ip.json
+

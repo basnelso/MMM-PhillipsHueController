@@ -226,3 +226,7 @@
 .MMM-PhillipsHueController .grid .hue .toggle {
     width: 100%;
 }
+.MMM-PhillipsHueController .grid .hue .bot {
+    cursor: pointer;
+    touch-action: none;
+}

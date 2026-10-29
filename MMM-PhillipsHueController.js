@@ -19,7 +19,13 @@ Module.register('MMM-PhillipsHueController', {
         displayFilter: ['all'],
         hideFilter: [],
         orderByName: false,
-        updateInterval: 10,
+        updateInterval: 15000,
+        // Lights the photobooth sets to white while capturing. Keys are free-form role names.
+        cameraLights: { left: 21, right: 22, bulb: 47 },
+        // How long (ms) a tapped room keeps its new state on screen while waiting for the bridge to report it.
+        toggleConfirmTimeout: 5000,
+        // Minimum time (ms) between brightness commands while dragging a room's brightness bar.
+        brightnessThrottle: 250,
         version: '1.4.0'
     },
 
@@ -52,12 +58,21 @@ Module.register('MMM-PhillipsHueController', {
 
         this.lights = {};
         this.groups = {};
-        this.camera21 = {};
-        this.camera22 = {};
+        // Light states from before the camera used them, keyed like config.cameraLights.
+        this.cameraLightStates = null;
         this.previewState = null;
         this.cameraStateFrozenUntil = 0;
 
         this.groupNumLookup = {};
+        // Rooms tapped but not yet reported back by the bridge: groupNum -> {on, until}.
+        this.pendingToggles = {};
+        // Brightness set from the mirror but not yet reported back by the bridge: groupNum -> {bri, until}.
+        this.pendingBrightness = {};
+        this.brightnessDragging = false;
+        this.renderAfterDrag = false;
+        this.suppressNextClick = false;
+        this.brightnessSendTimer = null;
+        this.lastBrightnessSent = 0;
 
         this.hbDataArr = [];
 
@@ -93,8 +108,13 @@ Module.register('MMM-PhillipsHueController', {
             room_wrapper.innerHTML = hbHtml;
 
             room_wrapper.addEventListener("click", function () {
+                if (self.suppressNextClick) {
+                    self.suppressNextClick = false;
+                    return;
+                }
                 self.roomClicked(hbData.rows[0].name);
             });
+            self.attachBrightnessDrag(room_wrapper, hbData.rows[0].name);
 
             outer_wrapper.appendChild(room_wrapper);
         })
@@ -104,45 +124,180 @@ Module.register('MMM-PhillipsHueController', {
 
     roomClicked: function(roomName) {
         let groupNum = this.groupNumLookup[roomName];
-        console.log('room num lookup', this.groupNumLookup)
-        console.log('groups are', this.groups)
         var room = this.groups[groupNum];
-        var anyOn = room.state.any_on;
-        if (anyOn) {
-            this.turnOffLights(groupNum);
+        if (!room) {
+            return;
+        }
+        var turnOn = !room.state.any_on;
+        // Show the new state straight away; the bridge takes a moment to confirm it.
+        this.pendingToggles[groupNum] = { on: turnOn, until: Date.now() + Number(this.config.toggleConfirmTimeout) };
+        this.applyGroupPower(this.groups, this.lights, groupNum, turnOn);
+        this.updateDom(0);
+        this.sendSocketNotification(turnOn ? 'TURN_ON_LIGHTS' : 'TURN_OFF_LIGHTS', groupNum);
+    },
+
+    /*
+     * Make a room's brightness bar draggable. Electron treats a finger drag as a scroll unless the touch events
+     * are handled directly, and the bar is thin, so touches just above or below it count too.
+     */
+    attachBrightnessDrag: function(wrapper, roomName) {
+        var self = this;
+        var bar = wrapper.querySelector('.bot');
+        var fill = bar && bar.querySelector('.toggle');
+        if (!fill) {
+            return;
+        }
+        var HIT_MARGIN = 15;
+        var dragging = false;
+
+        var onBar = function(clientY) {
+            var rect = bar.getBoundingClientRect();
+            return clientY >= rect.top - HIT_MARGIN && clientY <= rect.bottom + HIT_MARGIN;
+        };
+        var update = function(clientX, isFinal) {
+            var rect = bar.getBoundingClientRect();
+            // The bar's width puts the knob's right edge at (percent - 1)% + 20px; solve so the knob follows the finger.
+            var percent = Math.round(((clientX - rect.left - 10) / rect.width) * 100 + 1);
+            percent = Math.min(100, Math.max(1, percent));
+            fill.style.width = self.brightnessBarWidth(percent);
+            self.setBrightness(self.groupNumLookup[roomName], Math.max(1, Math.round(percent * 254 / 100)), isFinal);
+        };
+        var begin = function() {
+            dragging = true;
+            self.brightnessDragging = true;
+        };
+        var finish = function() {
+            dragging = false;
+            self.brightnessDragging = false;
+            if (self.renderAfterDrag) {
+                self.renderAfterDrag = false;
+                self.applyPendingBrightness(self.groups, self.lights);
+                self.updateDom();
+            }
+        };
+
+        wrapper.addEventListener('touchstart', function(event) {
+            if (!onBar(event.touches[0].clientY)) {
+                return;
+            }
+            // Also stops the tap from becoming a click, which would toggle the room.
+            event.preventDefault();
+            begin();
+            update(event.touches[0].clientX, false);
+        }, { passive: false });
+        wrapper.addEventListener('touchmove', function(event) {
+            if (dragging) {
+                event.preventDefault();
+                update(event.touches[0].clientX, false);
+            }
+        }, { passive: false });
+        wrapper.addEventListener('touchend', function(event) {
+            if (dragging) {
+                event.preventDefault();
+                update(event.changedTouches[0].clientX, true);
+                finish();
+            }
+        }, { passive: false });
+        wrapper.addEventListener('touchcancel', function() {
+            if (dragging) {
+                finish();
+            }
+        });
+
+        // Mouse support, for testing in a desktop browser.
+        wrapper.addEventListener('mousedown', function(event) {
+            if (!onBar(event.clientY)) {
+                return;
+            }
+            event.preventDefault();
+            begin();
+            update(event.clientX, false);
+            var move = function(moveEvent) {
+                update(moveEvent.clientX, false);
+            };
+            var up = function(upEvent) {
+                window.removeEventListener('mousemove', move);
+                window.removeEventListener('mouseup', up);
+                update(upEvent.clientX, true);
+                self.suppressNextClick = true;
+                setTimeout(function() { self.suppressNextClick = false; }, 0);
+                finish();
+            };
+            window.addEventListener('mousemove', move);
+            window.addEventListener('mouseup', up);
+        });
+    },
+
+    setBrightness: function(groupNum, bri, isFinal) {
+        var self = this;
+        if (this.groups[groupNum] === undefined) {
+            return;
+        }
+        this.pendingBrightness[groupNum] = { bri: bri, until: Date.now() + Number(this.config.toggleConfirmTimeout) };
+
+        var send = function() {
+            self.brightnessSendTimer = null;
+            self.lastBrightnessSent = Date.now();
+            self.sendSocketNotification('SET_GROUP_BRIGHTNESS', { num: groupNum, bri: self.pendingBrightness[groupNum].bri });
+        };
+        clearTimeout(this.brightnessSendTimer);
+        var wait = Number(this.config.brightnessThrottle) - (Date.now() - this.lastBrightnessSent);
+        if (isFinal || wait <= 0) {
+            send();
         } else {
-            this.turnOnLights(groupNum);
+            this.brightnessSendTimer = setTimeout(send, wait);
         }
     },
 
-    turnOffLights: function(groupNum) {
-        const hueUrl = `https://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
-        const payload = {
-            "url": hueUrl,
-            "num": groupNum
+    /*
+     * Keep rooms showing the brightness set from the mirror until the bridge reports it, as for toggles.
+     */
+    applyPendingBrightness: function(groups, lights, fromBridge) {
+        for (const [groupNum, pending] of Object.entries(this.pendingBrightness)) {
+            var group = groups[groupNum];
+            if (!group || Date.now() > pending.until) {
+                delete this.pendingBrightness[groupNum];
+                continue;
+            }
+            var onLights = group.lights.map(function(lightId) { return lights[lightId]; })
+                .filter(function(light) { return light && light.state.on; });
+            var confirmed = onLights.every(function(light) { return Math.abs(light.state.bri - pending.bri) <= 2; });
+            if (fromBridge && confirmed && !this.brightnessDragging) {
+                delete this.pendingBrightness[groupNum];
+                continue;
+            }
+            onLights.forEach(function(light) { light.state.bri = pending.bri; });
         }
-        this.sendSocketNotification('TURN_OFF_LIGHTS', payload);
     },
 
-    turnOffLightsLocally: function(groupNum) {
-        this.groups[groupNum].state.all_on = false;
-        this.groups[groupNum].state.any_on = false;
-        this.updateDom();
-    },
-
-    turnOnLights: function(groupNum) {
-        const hueUrl = `https://${this.config.bridgeIp}/api/${this.config.user}/groups/${groupNum}/action`;
-        const payload = {
-            "url": hueUrl,
-            "num": groupNum
+    applyGroupPower: function(groups, lights, groupNum, on) {
+        var group = groups[groupNum];
+        if (!group) {
+            return;
         }
-        this.sendSocketNotification('TURN_ON_LIGHTS', payload);
+        group.state.all_on = on;
+        group.state.any_on = on;
+        group.lights.forEach(function(lightId) {
+            var light = lights[lightId];
+            if (light && light.state.reachable !== false) {
+                light.state.on = on;
+            }
+        });
     },
 
-    turnOnLightsLocally: function(groupNum) {
-        this.groups[groupNum].state.all_on = true;
-        this.groups[groupNum].state.any_on = true;
-        this.updateDom();
+    /*
+     * Keep tapped rooms showing their new state until the bridge reports it, so a poll or event read just
+     * before the change landed doesn't flip the tile back.
+     */
+    applyPendingToggles: function(groups, lights) {
+        for (const [groupNum, pending] of Object.entries(this.pendingToggles)) {
+            var group = groups[groupNum];
+            if (!group || Date.now() > pending.until || group.state.any_on === pending.on) {
+                delete this.pendingToggles[groupNum];
+                continue;
+            }
+            this.applyGroupPower(groups, lights, groupNum, pending.on);
+        }
     },
 
     renderGrid: function() {
@@ -305,14 +460,7 @@ Module.register('MMM-PhillipsHueController', {
             if (isOn) {
                 itemBrightnessInPercent = Math.ceil(100/254 * itemBrightness);
 
-                // some weird tweaks based on what I saw in the Hue app
-                if (itemBrightnessInPercent < 91) {
-                    itemBrightnessStyle = 'calc(' + (itemBrightnessInPercent - 1) + '% + 20px)';
-                } else if (itemBrightnessInPercent > 97) {
-                    itemBrightnessStyle = '100%';
-                } else {
-                    itemBrightnessStyle = itemBrightnessInPercent + '%';
-                }
+                itemBrightnessStyle = self.brightnessBarWidth(itemBrightnessInPercent);
             }
 
             // set light text (only relevant for groups)
@@ -358,27 +506,28 @@ Module.register('MMM-PhillipsHueController', {
         }
 
 
-        // generate html from template
-        var container = document.createElement("div");
-        container.className = "master-container";
+    },
 
-        var da
-
-
-        container = da;
-
-        return container;
+    brightnessBarWidth: function(percent) {
+        // some weird tweaks based on what I saw in the Hue app
+        if (percent < 91) {
+            return 'calc(' + (percent - 1) + '% + 20px)';
+        } else if (percent > 97) {
+            return '100%';
+        }
+        return percent + '%';
     },
 
     getData: function() {
         if (!this.sleeping) {
-            if ((this.config.bridgeIp === '') || (this.config.user === '')) {
-                this.errMsg = 'Please add your Hue bridge IP and user to the MagicMirror config.js file.';
+            if (this.config.user === '') {
+                this.errMsg = 'Please add your Hue user to the MagicMirror config.js file.';
                 this.updateDom();
             } else {
                 this.sendSocketNotification('MMM_HUE_LIGHTS_GET', {
                     bridgeIp: this.config.bridgeIp,
-                    user: this.config.user
+                    user: this.config.user,
+                    cameraLights: this.config.cameraLights
                 });
             }
 
@@ -392,10 +541,17 @@ Module.register('MMM-PhillipsHueController', {
         } else if (notification === 'MMM_HUE_LIGHTS_DATA_ERROR') {
             this.errMsg = payload;
             this.updateDom();
-        } else if (notification === 'LIGHTS_TURNED_ON') {
-            this.turnOnLightsLocally(payload);
-        } else if (notification === 'LIGHTS_TURNED_OFF') {
-            this.turnOffLightsLocally(payload);
+        } else if (notification === 'LIGHTS_TURNED_ON' || notification === 'LIGHTS_TURNED_OFF') {
+            this.getData();
+        } else if (notification === 'BRIGHTNESS_FAILED') {
+            Log.error(this.name + ': could not set brightness of group ' + payload.num + ': ' + payload.error);
+            delete this.pendingBrightness[payload.num];
+            this.getData();
+        } else if (notification === 'LIGHTS_TOGGLE_FAILED') {
+            // Drop the optimistic state so the next read puts the tile back as it really is.
+            Log.error(this.name + ': could not switch group ' + payload.num + ': ' + payload.error);
+            delete this.pendingToggles[payload.num];
+            this.getData();
         }
     },
 
@@ -405,10 +561,7 @@ Module.register('MMM-PhillipsHueController', {
                 this.cameraDeployed = true; 
                 // If a slider preview is showing, the lights are already the preview white, so save the
                 // state from before the preview instead.
-                const body = this.previewState || {
-                    "left": this.camera21,
-                    "right": this.camera22
-                };
+                const body = this.previewState || this.cameraLightStates;
                 this.previewState = null;
                 console.log("recieved lights on notification, camera is deployed?", this.cameraDeployed)
                 console.log('Sending a notification to photobooth to save light state.')
@@ -416,20 +569,19 @@ Module.register('MMM-PhillipsHueController', {
 
                 this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
             } else if (notification == 'REVERSE_LIGHTS_BACK' && this.cameraDeployed) { // This should have the color the lights were in the payload
-                this.sendSocketNotification('SWITCH_CAMERA_COLOR', payload);
-                this.rememberRestoredCameraState(payload);
+                // Fill in any light the photobooth's saved copy lacks from this module's own copy.
+                const savedStates = Object.assign({}, this.cameraLightStates, payload);
+                this.sendSocketNotification('SWITCH_CAMERA_COLOR', savedStates);
+                this.rememberRestoredCameraState(savedStates);
                 this.cameraDeployed = false; 
             } else if (notification == 'PREVIEW_TEMP' && !this.cameraDeployed) {
                 // Until the first bridge poll arrives there is no state to restore afterwards, so skip the preview.
-                if (!this.camera21.hasOwnProperty('on')) {
+                if (!this.cameraLightStates) {
                     console.log('No camera light state yet, skipping preview');
                     return;
                 }
                 if (!this.previewState) {
-                    this.previewState = {
-                        "left": this.camera21,
-                        "right": this.camera22
-                    };
+                    this.previewState = this.cameraLightStates;
                 }
                 this.sendSocketNotification('SWITCH_CAMERA_WHITE', payload);
             } else if (notification == 'END_PREVIEW' && this.previewState && !this.cameraDeployed) {
@@ -443,11 +595,45 @@ Module.register('MMM-PhillipsHueController', {
         }
     },
 
+    cameraInUse: function() {
+        return this.cameraDeployed || Boolean(this.previewState) || Date.now() <= this.cameraStateFrozenUntil;
+    },
+
+    /*
+     * Remember the camera lights' states while the camera isn't using them, so they can be restored afterwards.
+     * While it is, replace what the bridge reports for them with the remembered states, so the photobooth's
+     * white light never shows up in the display.
+     */
+    trackCameraLights: function(lights) {
+        var cameraLights = this.config.cameraLights || {};
+
+        if (!this.cameraInUse()) {
+            var states = {};
+            for (const [role, lightId] of Object.entries(cameraLights)) {
+                if (lights[lightId]) {
+                    states[role] = Object.assign({}, lights[lightId].state);
+                }
+            }
+            this.cameraLightStates = Object.keys(states).length > 0 ? states : null;
+            return;
+        }
+
+        if (!this.cameraLightStates) {
+            return;
+        }
+        for (const [role, lightId] of Object.entries(cameraLights)) {
+            var saved = this.cameraLightStates[role];
+            if (lights[lightId] && saved) {
+                // Reachability is live information, not something the camera changed.
+                lights[lightId].state = Object.assign({}, saved, { reachable: lights[lightId].state.reachable });
+            }
+        }
+    },
+
     // After a restore the bridge takes a moment to settle and a poll may already be in flight with the old
     // colour, so trust the state that was just restored until the next couple of polls.
     rememberRestoredCameraState: function(restoredState) {
-        this.camera21 = restoredState.left;
-        this.camera22 = restoredState.right;
+        this.cameraLightStates = restoredState;
         this.cameraStateFrozenUntil = Date.now() + 2 * Number(this.config.updateInterval);
     },
 
@@ -482,7 +668,8 @@ Module.register('MMM-PhillipsHueController', {
         var hideFilter = this.config.hideFilter;
 
         var renderUi = true;
-        var forceRender = false;
+        // A previous error replaced the whole display, so redraw even if the lights haven't changed since.
+        var forceRender = this.errMsg !== '';
 
         var oldLights = this.lights;
         var oldGroups = this.groups;
@@ -492,13 +679,7 @@ Module.register('MMM-PhillipsHueController', {
         var lights = data.lights;
         var groups = data.groups;
 
-        // Before anything, grab the camera light states for picture taking if camera is not deployed.
-        // Skip this while a slider preview is showing, and briefly after the lights are restored: a poll taken
-        // then reports the preview white, which would later be "restored" instead of the real colour.
-        if (!this.cameraDeployed && !this.previewState && Date.now() > this.cameraStateFrozenUntil) {
-            this.camera21 = data["lights"]["21"]["state"];
-            this.camera22 = data["lights"]["22"]["state"];
-        }
+        this.trackCameraLights(data.lights);
 
         // for the groups, let's immediately filter out anything that doesn't have a type of 'Room'
 
@@ -603,25 +784,38 @@ Module.register('MMM-PhillipsHueController', {
 
             var numberOfLightsInGroup = group.lights.length;
             var any_on = false;
+            var all_on = numberOfLightsInGroup > 0;
 
             for (var i = 0; i < numberOfLightsInGroup; i++) {
                 var hueLightID = group.lights[i];
 
-                if (data.lights[hueLightID].state.reachable == false) {
+                var lightState = data.lights[hueLightID] && data.lights[hueLightID].state;
+                if (!lightState) {
+                    continue;
+                }
+
+                if (lightState.reachable == false) {
                     // if light is not reachable
-                    data.lights[hueLightID].state.on = false;
-                    group.state.all_on = false;
+                    lightState.on = false;
                     forceRender = true;
+                }
+
+                if (lightState.on == true) {
+                    any_on = true;
                 } else {
-                    if (data.lights[hueLightID].state.on == true) {
-                        any_on = true;
-                    }
+                    all_on = false;
                 }
             }
 
+            // Recomputed from the lights rather than trusted from the bridge, so unreachable lights and the
+            // camera light substitution in trackCameraLights are reflected.
             group.state.any_on = any_on;
+            group.state.all_on = all_on && any_on;
 
         });
+
+        this.applyPendingToggles(groups, lights);
+        this.applyPendingBrightness(groups, lights, true);
 
         // check old data to make sure we're not re-rendering the UI for no reason
         if (this.loaded) {
@@ -659,7 +853,12 @@ Module.register('MMM-PhillipsHueController', {
                 this.errMsg = '';
             }
 
-            this.updateDom();
+            // Redrawing mid-drag would replace the bar under the finger, so wait until it is let go.
+            if (this.brightnessDragging) {
+                this.renderAfterDrag = true;
+            } else {
+                this.updateDom();
+            }
         }
     },
 
@@ -737,13 +936,13 @@ Module.register('MMM-PhillipsHueController', {
             if (argType === 'string' || argType === 'number') {
                 classes.push(arg);
             } else if (Array.isArray(arg) && arg.length) {
-                var inner = classNames.apply(null, arg);
+                var inner = this.classNames.apply(this, arg);
                 if (inner) {
                     classes.push(inner);
                 }
             } else if (argType === 'object') {
                 for (var key in arg) {
-                    if (hasOwn.call(arg, key) && arg[key]) {
+                    if (Object.prototype.hasOwnProperty.call(arg, key) && arg[key]) {
                         classes.push(key);
                     }
                 }
@@ -978,7 +1177,7 @@ Module.register('MMM-PhillipsHueController', {
         var self = this;
         setInterval(() => {
             self.getData();
-        }, self.config.updateInterval);
+        }, Number(self.config.updateInterval));
     }
 
 });

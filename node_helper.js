@@ -1,406 +1,411 @@
 var NodeHelper = require('node_helper');
-var request = require('request');
 const https = require('https');
+const fs = require('fs');
+const path = require('path');
 
-// Philips Hue bridges use a certificate that Node.js does not
-// automatically trust. This disables certificate verification
-// ONLY for requests made through this Hue agent.
+// Hue bridges serve a self-signed certificate, so verification is disabled for bridge requests only.
 const hueAgent = new https.Agent({
     rejectUnauthorized: false
 });
 
-let fetch;
+const BRIDGE_CACHE_FILE = path.join(__dirname, 'bridge-ip.json');
+const DISCOVERY_URL = 'https://discovery.meethue.com';
+// The discovery service rate-limits callers, so it is asked at most this often.
+const DISCOVERY_MIN_INTERVAL = 5 * 60 * 1000;
+const NETWORK_ERROR_CODES = ['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'ECONNRESET', 'ETIMEOUT'];
+const STREAM_RETRY_MIN = 5000;
+const STREAM_RETRY_MAX = 60000;
+// Several events usually arrive together (one per light in a room), so refresh once they settle.
+const STREAM_REFRESH_DELAY = 300;
 
-// Dynamically import node-fetch (v3 is ESM-only)
-(async () => {
-    fetch = (await import('node-fetch')).default;
-})();
+const COLOR_TEMPERATURES = {
+    cool: 153,
+    medium: 260,
+    warm: 360
+};
 
 module.exports = NodeHelper.create({
 
     start: function() {
         console.log('Starting node_helper for module [' + this.name + ']');
 
-        // These are populated when MMM_HUE_LIGHTS_GET is received.
-        this.bridgeIp = null;
+        // Populated from the config sent with every MMM_HUE_LIGHTS_GET.
+        this.configuredBridgeIp = null;
+        this.bridgeIp = this.readCachedBridgeIp();
         this.user = null;
+        this.cameraLights = null;
+        this.lastDiscovery = 0;
+        this.discovering = null;
+
+        this.stream = null;
+        this.streamRetryDelay = STREAM_RETRY_MIN;
+        this.streamRetryTimer = null;
+        this.streamRefreshTimer = null;
     },
 
-    /*
-     * Store the Hue configuration received from the main module.
-     */
     setHueConfig: function(payload) {
-        if (payload.bridgeIp) {
-            this.bridgeIp = payload.bridgeIp;
+        if (payload.bridgeIp && payload.bridgeIp !== this.configuredBridgeIp) {
+            this.configuredBridgeIp = payload.bridgeIp;
+            if (!this.bridgeIp) {
+                this.bridgeIp = payload.bridgeIp;
+            }
         }
+        this.user = payload.user;
+        this.cameraLights = payload.cameraLights;
+    },
 
-        if (payload.user) {
-            this.user = payload.user;
+    readCachedBridgeIp: function() {
+        try {
+            return JSON.parse(fs.readFileSync(BRIDGE_CACHE_FILE, 'utf8')).bridgeIp || null;
+        } catch (error) {
+            return null;
         }
+    },
 
-        console.log('Hue bridge configured:', this.bridgeIp);
+    useBridgeIp: function(bridgeIp) {
+        if (bridgeIp === this.bridgeIp) {
+            return;
+        }
+        console.log('Using Hue bridge at ' + bridgeIp);
+        this.bridgeIp = bridgeIp;
+        try {
+            fs.writeFileSync(BRIDGE_CACHE_FILE, JSON.stringify({ bridgeIp: bridgeIp }) + '\n');
+        } catch (error) {
+            console.error('Could not save the Hue bridge address:', error.message);
+        }
+        this.restartEventStream();
+    },
+
+    isNetworkError: function(error) {
+        return NETWORK_ERROR_CODES.includes(error.code) || error.message === 'Request timed out';
     },
 
     /*
-     * Build a Hue API URL using the configured bridge and user.
+     * Find a bridge that accepts our user: the configured address, then the bridges the Hue discovery service
+     * reports for this network. Resolves with the address now in use, or rejects if none answered.
      */
-    hueUrl: function(path) {
-        return `https://${this.bridgeIp}/api/${this.user}/${path}`;
-    },
-
-    /*
-     * Turn off a Hue group.
-     */
-    turnOffAllLights: function(payload) {
+    findBridge: function() {
         var self = this;
-
-        if (!fetch) {
-            self.sendSocketNotification(
-                "LIGHTS_TURNED_OFF",
-                "Hue API Error: node-fetch is not ready yet."
-            );
-            return;
+        if (this.discovering) {
+            return this.discovering;
         }
+        if (Date.now() - this.lastDiscovery < DISCOVERY_MIN_INTERVAL) {
+            return Promise.reject(new Error('Hue bridge not reachable at ' + this.bridgeIp));
+        }
+        this.lastDiscovery = Date.now();
 
-        fetch(payload.url, {
-            method: 'PUT',
-            agent: hueAgent,
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                "on": false
+        this.discovering = this.discoverBridgeIps()
+            .catch(function(error) {
+                console.error('Hue bridge discovery failed:', error.message);
+                return [];
             })
-        })
-        .then(async results => {
-            if (!results.ok) {
-                const body = await results.text();
-                throw new Error(
-                    `Hue API returned ${results.status}: ${body}`
-                );
-            }
+            .then(async function(discoveredIps) {
+                var candidates = [self.configuredBridgeIp].concat(discoveredIps)
+                    .filter(function(ip, index, all) { return ip && ip !== self.bridgeIp && all.indexOf(ip) === index; });
+                for (const candidate of candidates) {
+                    try {
+                        await self.hueRequestAt(candidate, 'GET', 'config');
+                        self.useBridgeIp(candidate);
+                        return candidate;
+                    } catch (error) {
+                        console.log('No usable Hue bridge at ' + candidate + ': ' + error.message);
+                    }
+                }
+                throw new Error('No Hue bridge found that accepts the configured user');
+            })
+            .finally(function() {
+                self.discovering = null;
+            });
+        return this.discovering;
+    },
 
-            self.sendSocketNotification("LIGHTS_TURNED_OFF", payload.num);
-        })
-        .catch((error) => {
-            console.error("Hue API error turning lights off:", error);
-            self.sendSocketNotification(
-                "LIGHTS_TURNED_OFF",
-                "Hue API Error: " + error.message
-            );
+    discoverBridgeIps: function() {
+        return new Promise(function(resolve, reject) {
+            var request = https.get(DISCOVERY_URL, { timeout: 10000 }, function(response) {
+                var chunks = [];
+                response.on('data', function(chunk) { chunks.push(chunk); });
+                response.on('end', function() {
+                    try {
+                        resolve(JSON.parse(Buffer.concat(chunks).toString()).map(function(bridge) { return bridge.internalipaddress; }));
+                    } catch (error) {
+                        reject(new Error('Unexpected discovery response (HTTP ' + response.statusCode + ')'));
+                    }
+                });
+            });
+            request.on('timeout', function() {
+                request.destroy(new Error('Request timed out'));
+            });
+            request.on('error', reject);
         });
     },
 
+
     /*
-     * Turn on a Hue group.
+     * Send a request to the bridge and resolve with the parsed JSON body. The bridge answers HTTP 200 even when
+     * a command fails, listing failures as {error: ...} entries, so those are rejected here too.
      */
-    turnOnAllLights: function(payload) {
+    hueRequest: function(method, apiPath, body) {
         var self = this;
+        var attempt = function() {
+            if (!self.bridgeIp) {
+                return Promise.reject(Object.assign(new Error('No bridge address yet'), { code: 'ENETUNREACH' }));
+            }
+            return self.hueRequestAt(self.bridgeIp, method, apiPath, body);
+        };
+        // If the bridge has moved (a new DHCP address), find it again and retry once.
+        return attempt().catch(function(error) {
+            if (!self.isNetworkError(error)) {
+                throw error;
+            }
+            return self.findBridge().then(attempt, function() { throw error; });
+        });
+    },
 
-        if (!fetch) {
-            self.sendSocketNotification(
-                "LIGHTS_TURNED_ON",
-                "Hue API Error: node-fetch is not ready yet."
-            );
+    hueRequestAt: function(bridgeIp, method, apiPath, body) {
+        var url = `https://${bridgeIp}/api/${this.user}/${apiPath}`;
+        return new Promise(function(resolve, reject) {
+            var request = https.request(url, {
+                method: method,
+                agent: hueAgent,
+                timeout: 10000,
+                headers: { 'Content-Type': 'application/json' }
+            }, function(response) {
+                var chunks = [];
+                response.on('data', function(chunk) { chunks.push(chunk); });
+                response.on('end', function() {
+                    var text = Buffer.concat(chunks).toString();
+                    if (response.statusCode < 200 || response.statusCode >= 300) {
+                        reject(new Error('HTTP ' + response.statusCode + ': ' + text));
+                        return;
+                    }
+                    var parsed;
+                    try {
+                        parsed = JSON.parse(text);
+                    } catch (parseError) {
+                        reject(new Error('Invalid JSON response'));
+                        return;
+                    }
+                    var errors = Array.isArray(parsed) ? parsed.filter(function(entry) { return entry.error; }) : [];
+                    if (errors.length > 0) {
+                        reject(new Error(errors.map(function(entry) { return entry.error.description; }).join('; ')));
+                        return;
+                    }
+                    resolve(parsed);
+                });
+            });
+            request.on('timeout', function() {
+                request.destroy(Object.assign(new Error('Request timed out'), { code: 'ETIMEOUT' }));
+            });
+            request.on('error', reject);
+            if (body) {
+                request.write(JSON.stringify(body));
+            }
+            request.end();
+        });
+    },
+
+    /*
+     * Only lights and groups are needed; fetching the whole bridge (/api/<user>) also downloads every sensor,
+     * rule and schedule on each poll.
+     */
+    getHueData: function() {
+        var self = this;
+        Promise.all([
+            this.hueRequest('GET', 'lights'),
+            this.hueRequest('GET', 'groups')
+        ]).then(function([lights, groups]) {
+            self.sendSocketNotification('MMM_HUE_LIGHTS_DATA', { lights: lights, groups: groups });
+        }).catch(function(error) {
+            console.error('Hue API error reading lights:', error.message);
+            self.sendSocketNotification('MMM_HUE_LIGHTS_DATA_ERROR', 'Hue API Error: ' + error.message);
+        });
+    },
+
+    /*
+     * Hold the bridge's v2 event stream open so changes made anywhere (the Hue app, a switch, a schedule) show
+     * on the mirror within a moment. Events only trigger a normal read, so the display logic stays in one place.
+     */
+    startEventStream: function() {
+        var self = this;
+        if (this.stream || this.streamRetryTimer || !this.bridgeIp || !this.user) {
             return;
         }
 
-        fetch(payload.url, {
-            method: 'PUT',
+        var buffered = '';
+        var request = https.get(`https://${this.bridgeIp}/eventstream/clip/v2`, {
             agent: hueAgent,
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                "on": true
+            headers: { 'hue-application-key': this.user, 'Accept': 'text/event-stream' }
+        }, function(response) {
+            if (response.statusCode !== 200) {
+                response.resume();
+                request.destroy(new Error('HTTP ' + response.statusCode));
+                return;
+            }
+            console.log('Hue event stream connected');
+            self.streamRetryDelay = STREAM_RETRY_MIN;
+            response.setEncoding('utf8');
+            response.on('data', function(chunk) {
+                buffered += chunk;
+                var messages = buffered.split('\n\n');
+                buffered = messages.pop();
+                if (messages.some(function(message) { return self.isLightEvent(message); })) {
+                    self.scheduleStreamRefresh();
+                }
+            });
+            response.on('end', function() {
+                request.destroy(new Error('Stream ended'));
+            });
+        });
+        request.on('error', function(error) {
+            if (self.stream === request) {
+                console.log('Hue event stream closed: ' + error.message);
+            }
+        });
+        request.on('close', function() {
+            if (self.stream !== request) {
+                return;
+            }
+            self.stream = null;
+            var delay = self.streamRetryDelay;
+            self.streamRetryDelay = Math.min(delay * 2, STREAM_RETRY_MAX);
+            self.streamRetryTimer = setTimeout(function() {
+                self.streamRetryTimer = null;
+                self.startEventStream();
+            }, delay);
+        });
+        this.stream = request;
+    },
+
+    restartEventStream: function() {
+        clearTimeout(this.streamRetryTimer);
+        this.streamRetryTimer = null;
+        this.streamRetryDelay = STREAM_RETRY_MIN;
+        var oldStream = this.stream;
+        this.stream = null;
+        if (oldStream) {
+            oldStream.destroy();
+        }
+        this.startEventStream();
+    },
+
+    isLightEvent: function(message) {
+        var dataLines = message.split('\n').filter(function(line) { return line.startsWith('data:'); });
+        if (dataLines.length === 0) {
+            return false;
+        }
+        try {
+            var events = JSON.parse(dataLines.map(function(line) { return line.slice(5); }).join('\n'));
+            return events.some(function(event) {
+                return (event.data || []).some(function(resource) {
+                    return resource.type === 'light' || resource.type === 'grouped_light';
+                });
+            });
+        } catch (error) {
+            return false;
+        }
+    },
+
+    scheduleStreamRefresh: function() {
+        var self = this;
+        clearTimeout(this.streamRefreshTimer);
+        this.streamRefreshTimer = setTimeout(function() {
+            self.getHueData();
+        }, STREAM_REFRESH_DELAY);
+    },
+
+    setGroupPower: function(groupNum, on) {
+        var self = this;
+        var notification = on ? 'LIGHTS_TURNED_ON' : 'LIGHTS_TURNED_OFF';
+        this.hueRequest('PUT', `groups/${groupNum}/action`, { on: on })
+            .then(function() {
+                self.sendSocketNotification(notification, groupNum);
             })
-        })
-        .then(async results => {
-            if (!results.ok) {
-                const body = await results.text();
-                throw new Error(
-                    `Hue API returned ${results.status}: ${body}`
-                );
-            }
+            .catch(function(error) {
+                console.error('Hue API error turning group ' + groupNum + (on ? ' on:' : ' off:'), error.message);
+                self.sendSocketNotification('LIGHTS_TOGGLE_FAILED', { num: groupNum, error: error.message });
+            });
+    },
 
-            self.sendSocketNotification("LIGHTS_TURNED_ON", payload.num);
-        })
-        .catch((error) => {
-            console.error("Hue API error turning lights on:", error);
-            self.sendSocketNotification(
-                "LIGHTS_TURNED_ON",
-                "Hue API Error: " + error.message
-            );
-        });
+    setGroupBrightness: function(groupNum, bri) {
+        var self = this;
+        this.hueRequest('PUT', `groups/${groupNum}/action`, { bri: bri })
+            .catch(function(error) {
+                console.error('Hue API error setting brightness of group ' + groupNum + ':', error.message);
+                self.sendSocketNotification('BRIGHTNESS_FAILED', { num: groupNum, error: error.message });
+            });
+    },
+
+    putLightState: function(lightId, body, description) {
+        this.hueRequest('PUT', `lights/${lightId}/state`, body)
+            .then(function(responseBody) {
+                console.log('Hue updated ' + description + ':', responseBody);
+            })
+            .catch(function(error) {
+                console.error('Hue API error for ' + description + ':', error.message);
+            });
     },
 
     /*
-     * Set the three camera lights to white.
-     *
-     * Existing camera light IDs:
-     * 21 = left
-     * 22 = right
-     * 47 = bulb
+     * Set the camera lights to white at full brightness. `type` is a colour temperature in mireds or one of
+     * the COLOR_TEMPERATURES names.
      */
-    setLightWhite: function(type) {
-        console.log("Changing the color back to white");
-
-        if (!this.bridgeIp || !this.user) {
-            console.error("Hue configuration has not been initialized.");
+    setCameraWhite: function(type) {
+        if (!this.user || !this.cameraLights) {
+            console.error('Hue configuration has not been initialized.');
             return;
         }
 
-        var ct = 153;
+        var ct = (typeof type === 'number') ? Math.round(type) : (COLOR_TEMPERATURES[type] || COLOR_TEMPERATURES.cool);
+        var body = { on: true, ct: ct, bri: 254 };
 
-        if (typeof type == 'number') {
-            ct = Math.round(type);
-        } else if (type == 'cool') {
-            ct = 153;
-        } else if (type == 'medium') {
-            ct = 260;
-        } else if (type == 'warm') {
-            ct = 360;
+        for (const [role, lightId] of Object.entries(this.cameraLights)) {
+            this.putLightState(lightId, body, role + ' camera light');
         }
-
-        var idLeft = 21;
-        var idRight = 22;
-        var idBulb = 47;
-
-        var url1 = this.hueUrl(`lights/${idLeft}/state`);
-        var url2 = this.hueUrl(`lights/${idRight}/state`);
-        var url3 = this.hueUrl(`lights/${idBulb}/state`);
-
-        var bri = 254;
-
-        var body = {
-            'on': true,
-            'ct': ct,
-            'bri': bri
-        };
-
-        this.putHueState(url1, body, 'left camera light');
-        this.putHueState(url2, body, 'right camera light');
-        this.putHueState(url3, body, 'camera bulb');
     },
 
     /*
-     * Restore the three camera lights to their previously stored states.
+     * Restore the camera lights to the states saved before the camera used them.
      */
-    setLightColor: function(payload) {
-        console.log(
-            "Setting lights back to stored state, with payload:",
-            payload
-        );
+    restoreCameraLights: function(savedStates) {
+        console.log('Setting camera lights back to stored state:', savedStates);
 
-        if (!this.bridgeIp || !this.user) {
-            console.error("Hue configuration has not been initialized.");
+        if (!this.user || !this.cameraLights) {
+            console.error('Hue configuration has not been initialized.');
             return;
         }
 
-        var idLeft = 21;
-        var idRight = 22;
-        var idBulb = 47;
-
-        var url1 = this.hueUrl(`lights/${idLeft}/state`);
-        var url2 = this.hueUrl(`lights/${idRight}/state`);
-        var url3 = this.hueUrl(`lights/${idBulb}/state`);
-
-        var leftBody = {
-            "on": payload.left.on !== false,
-            "bri": payload.left.bri,
-            "hue": payload.left.hue,
-            "sat": payload.left.sat,
-            "xy": payload.left.xy,
-            "ct": payload.left.ct,
-            "colormode": payload.left.colorMode
-        };
-
-        var rightBody = {
-            "on": payload.right.on !== false,
-            "bri": payload.right.bri,
-            "hue": payload.right.hue,
-            "sat": payload.right.sat,
-            "xy": payload.right.xy,
-            "ct": payload.right.ct,
-            "colormode": payload.right.colorMode
-        };
-
-        /*
-         * Your original code uses the RIGHT state for light 47,
-         * so that behavior is intentionally preserved here.
-         */
-        var bulbBody = {
-            "on": payload.right.on !== false,
-            "bri": payload.right.bri,
-            "hue": payload.right.hue,
-            "sat": payload.right.sat,
-            "xy": payload.right.xy,
-            "ct": payload.right.ct,
-            "colormode": payload.right.colorMode
-        };
-
-        this.putHueState(url1, leftBody, 'left camera light');
-        this.putHueState(url2, rightBody, 'right camera light');
-        this.putHueState(url3, bulbBody, 'camera bulb');
-    },
-
-    /*
-     * Helper for PUT requests to the Hue API.
-     */
-    putHueState: function(url, body, description) {
-        request({
-            url: url,
-            method: "PUT",
-            strictSSL: false,
-            headers: {
-                "content-type": "application/json"
-            },
-            body: body,
-            json: true
-        }, function(err, res, responseBody) {
-
-            if (err) {
-                console.error(
-                    "Hue API error for " + description + ":",
-                    err
-                );
-                return;
+        for (const [role, lightId] of Object.entries(this.cameraLights)) {
+            var saved = savedStates && savedStates[role];
+            if (!saved) {
+                console.error('No saved state for the ' + role + ' camera light, leaving it as it is.');
+                continue;
             }
-
-            if (!res || res.statusCode < 200 || res.statusCode >= 300) {
-                console.error(
-                    "Hue API returned an error for " +
-                    description + ":",
-                    res ? res.statusCode : 'unknown',
-                    responseBody
-                );
-                return;
-            }
-
-            // The bridge answers HTTP 200 even when a command fails, listing failures as {error: ...} entries.
-            var errors = Array.isArray(responseBody) ? responseBody.filter(function(entry) { return entry.error; }) : [];
-            if (errors.length > 0) {
-                console.error(
-                    "Hue rejected update for " + description + ":",
-                    JSON.stringify(errors)
-                );
-                return;
-            }
-
-            console.log(
-                "Hue updated " + description + ":",
-                responseBody
-            );
-        });
+            this.putLightState(lightId, {
+                on: saved.on !== false,
+                bri: saved.bri,
+                hue: saved.hue,
+                sat: saved.sat,
+                xy: saved.xy,
+                ct: saved.ct
+            }, role + ' camera light');
+        }
     },
 
     socketNotificationReceived: function(notification, payload) {
-
-        console.log('Notification received:', notification);
-
-        /*
-         * Initial Hue API request.
-         *
-         * This is where the main MagicMirror module passes:
-         * bridgeIp
-         * user
-         */
         if (notification === 'MMM_HUE_LIGHTS_GET') {
-
             this.setHueConfig(payload);
-
-            var bridgeIp = payload.bridgeIp;
-            var user = payload.user;
-
-            var url = `https://${bridgeIp}/api/${user}`;
-
-            var self = this;
-
-            request({
-                url: url,
-                method: 'GET',
-                strictSSL: false
-            }, function(err, res, body) {
-
-                if (err) {
-                    console.error("Hue API connection error:", err);
-
-                    self.sendSocketNotification(
-                        'MMM_HUE_LIGHTS_DATA_ERROR',
-                        'Hue API Error: ' + err.message
-                    );
-
-                    return;
-                }
-
-                if (!res || res.statusCode !== 200) {
-
-                    console.error(
-                        "Hue API returned status:",
-                        res ? res.statusCode : 'unknown',
-                        body
-                    );
-
-                    self.sendSocketNotification(
-                        'MMM_HUE_LIGHTS_DATA_ERROR',
-                        'Hue API Error: HTTP ' +
-                        (res ? res.statusCode : 'unknown')
-                    );
-
-                    return;
-                }
-
-                if (!body) {
-                    self.sendSocketNotification(
-                        'MMM_HUE_LIGHTS_DATA_ERROR',
-                        'Hue API Error: No Hue data was received.'
-                    );
-
-                    return;
-                }
-
-                try {
-                    var data = JSON.parse(body);
-
-                    self.sendSocketNotification(
-                        'MMM_HUE_LIGHTS_DATA',
-                        data
-                    );
-
-                } catch (parseError) {
-
-                    console.error(
-                        "Unable to parse Hue API response:",
-                        parseError
-                    );
-
-                    self.sendSocketNotification(
-                        'MMM_HUE_LIGHTS_DATA_ERROR',
-                        'Hue API Error: Invalid JSON response.'
-                    );
-                }
-            });
-
-        } else if (notification === "TURN_OFF_LIGHTS") {
-
-            this.turnOffAllLights(payload);
-
-        } else if (notification === "TURN_ON_LIGHTS") {
-
-            this.turnOnAllLights(payload);
-
-        } else if (notification === "SWITCH_CAMERA_WHITE") {
-
-            this.setLightWhite(payload);
-
-        } else if (notification === "SWITCH_CAMERA_COLOR") {
-
-            console.log(
-                "Switching camera color back:",
-                payload
-            );
-
-            this.setLightColor(payload);
+            this.getHueData();
+            this.startEventStream();
+        } else if (notification === 'TURN_OFF_LIGHTS') {
+            this.setGroupPower(payload, false);
+        } else if (notification === 'TURN_ON_LIGHTS') {
+            this.setGroupPower(payload, true);
+        } else if (notification === 'SET_GROUP_BRIGHTNESS') {
+            this.setGroupBrightness(payload.num, payload.bri);
+        } else if (notification === 'SWITCH_CAMERA_WHITE') {
+            this.setCameraWhite(payload);
+        } else if (notification === 'SWITCH_CAMERA_COLOR') {
+            this.restoreCameraLights(payload);
         }
     }
 });
